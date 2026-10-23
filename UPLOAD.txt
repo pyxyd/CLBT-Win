@@ -3,7 +3,8 @@
 
 一、准备（已完成）
   本文件夹 D:\CLBT-Win 里只有该提交进 git 的源码与资源（约 25 MB，主要是字体）。
-  发布资产（install.exe / CLBT.zip）在 D:\CLBT-Release，单独上传到 Releases。
+  发布资产只有 CLBT.zip（里面已包含 install.exe，不再单独放一份，避免重复 25MB 下载）。
+  CLBT.zip 在 D:\CLBT-Release。
 
 二、网页上传（不需要装 git）
   1. 打开 https://github.com/new
@@ -19,7 +20,7 @@
      - Choose a tag: v1.0.0（点 Create new tag）
      - Release title: CLBT v1.0.0
      - 描述: 复制 CHANGELOG.md 里 v1.0.0 的内容
-     - 附件: 上传 D:\CLBT-Release\install.exe 和 CLBT.zip
+     - 附件: 只上传 D:\CLBT-Release\CLBT.zip（不要单独传 install.exe）
      - Publish release
 
 三、用 git 上传（可选，需先安装 git）
@@ -35,6 +36,6 @@
 四、检查清单
   [ ] README 里的截图能正常显示（screenshots/ 已包含）
   [ ] LICENSE（字体 OFL 1.1）和 NOTICE.md 都在根目录
-  [ ] Releases 里有两个附件：install.exe、CLBT.zip
+  [ ] Releases 里只有一个附件：CLBT.zip（内含 install.exe）
   [ ] README 顶部的 Releases 链接可用
   [ ] 仓库里没有 terminal-setup.cmd（33MB 构建产物）
