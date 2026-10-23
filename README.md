@@ -1,0 +1,153 @@
+# CLBT —— Windows 命令行美化工具
+
+> 一条命令，把 Windows Terminal 变成仿 Linux 的黑玻璃终端；再一条命令，还原成 Windows 原生。
+
+- **单文件分发**：`install.exe`（25 MB）自带 10 个 Nerd Font 字体，双击即装，不需要管理员权限
+- **两种风格**：仿 Linux（黑色亚克力 + bash 提示符）/ Windows 原生
+- **背景图 + 透明度**：图片按"水印"强度自动跟随窗口透明度，互不打架
+- **自适应前景色**：窗口透明时，按周围背景明暗自动切换深/浅色文字
+- **自动解决 bat 乱码**：安装时把 Terminal 里的 cmd 标签改成 UTF-8 启动
+
+![工具界面](screenshots/tool-ui.png)
+
+![cmd 提示符](screenshots/cmd-prompt.png)
+
+## 快速开始
+
+### 方式一：用现成的安装器（推荐）
+
+1. 从 [Releases](../../releases) 下载 `install.exe`
+2. 放到一个固定目录（例如 `D:\Tools\CLBT`），双击运行
+3. 重新打开终端，输入 `CLBT -help`
+
+安装器会做四件事：
+
+| 动作 | 说明 |
+|---|---|
+| 释放工具本体 | 写出 `terminal-setup.cmd`（33 MB，内含字体） |
+| 生成入口命令 | 写出 `CLBT.cmd` |
+| 加入用户 PATH | 只写 `HKCU`，不影响系统 PATH，重复运行不产生重复项 |
+| 开启 UTF-8 | 把 Terminal 里 cmd 标签的 commandline 改成 `cmd.exe /k chcp 65001 >nul` |
+
+不想自动改编码：`install.exe --no-encoding`
+
+### 方式二：从源码构建
+
+```bat
+python build_package.py          :: 模板 + 字体 -> terminal-setup.cmd
+python make_dist.py              :: 生成 dist\CLBT.zip
+python -m PyInstaller --onefile --console --name install ^
+  --distpath dist --workpath build --specpath build --noconfirm ^
+  --icon dist\icon.ico --version-file version_info.txt ^
+  --add-data "terminal-setup.cmd;." install.py
+```
+
+## 命令一览
+
+```bat
+CLBT                                   交互式菜单（7 步问答）
+CLBT -linux                            仿 Linux：黑色亚克力 + Tango 配色 + bash 提示符
+CLBT -win                              Windows 原生：Campbell 配色 + 不透明 + 默认提示符
+
+CLBT -transparent 40                   透明度（0=不透明，100=全透）
+CLBT -opacity 60                       不透明度（与 Terminal 的 opacity 同义）
+
+CLBT -background "D:\pics\bg.png"      背景图（png/jpg/jpeg/gif/bmp，也可给目录）
+CLBT -background off                   移除背景图
+CLBT -bg-opacity 0.22                  背景图浓淡（默认跟随窗口透明度）
+CLBT -bg-align topLeft                 对齐：center/top/bottom/left/right/topLeft/...
+CLBT -bg-stretch uniform               拉伸：uniformToFill/fill/uniform/none
+
+CLBT -font "D:\fonts\my.ttf"           安装并使用指定字体（文件或目录）
+CLBT -cell-height 1.2                  行高 0.8–2.0
+CLBT -antialiasing grayscale           抗锯齿：grayscale/cleartype/aliased
+CLBT -adjust-colors always             不可辨颜色修正：always/indexed/never
+
+CLBT -adaptive                         开启自适应前景色
+CLBT -adaptive off                     关闭
+CLBT -encoding on|off                  让 cmd 标签以 UTF-8 启动（消除 bat 乱码）
+
+CLBT -uninstall                        撤回对命令行的全部修改
+CLBT -help                             显示帮助
+```
+
+**不指定 `-linux` / `-win` 时会沿用当前风格**——只调透明度不会把风格改掉。
+
+## 交互菜单
+
+```
+  || Windows 命令行 美化工具 ||
+
+请选择操作 (填序号) :
+  1) 应用美化   选择风格 / 透明度 / 字体，并可选 cmd 提示符与自适应前景色
+  2) 撤回修改   还原外观、提示符、cmd 挂钩、自适应（等价于 -uninstall）
+  3) 查看帮助   列出全部命令行用法（等价于 -help）
+```
+
+选 1 后依次询问：风格 → 透明度 → 字体（含"自定义字体文件"）→ cmd 提示符 → 背景图 → 高级外观（行高/抗锯齿/颜色修正/背景对齐/背景浓淡）→ 自适应。每步直接回车都用推荐默认值。
+
+## 它会修改什么（透明披露）
+
+| 位置 | 内容 | 可撤销 |
+|---|---|---|
+| `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_*\LocalState\settings.json` | 配色、透明度、背景图、字体、光标等 | `CLBT -uninstall`（自动备份 `.bak-*`） |
+| `%USERPROFILE%\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1` | 仿 Linux 提示符 + 键位 | 同上（删除本工具生成的 profile） |
+| `%LOCALAPPDATA%\Microsoft\Windows\Fonts` + `HKCU\...\Fonts` | 按当前用户安装字体 | 手动删除 |
+| `HKCU\Environment\Path` | 加入安装目录 | `install.exe --uninstall` |
+| `HKCU\Software\Microsoft\Command Processor\AutoRun` | **仅在交互里选 y 时**写入，用于 cmd 提示符 | `CLBT -adaptive off` / `CLBT -uninstall` |
+| Terminal 中 cmd 配置的 `commandline` | 追加 `/k chcp 65001 >nul` | `CLBT -encoding off` |
+
+**不需要管理员权限**，不修改系统级设置（不动 `HKLM`）。
+
+## 卸载
+
+```bat
+CLBT -uninstall          :: 撤回外观/提示符/cmd 挂钩/自适应，字体文件保留
+install.exe --uninstall  :: 彻底卸载命令本身（清 PATH + 删 CLBT.cmd）
+```
+
+## 常见问题
+
+**运行 .bat 中文乱码？**
+不是字体问题，是**代码页**。cmd 默认 936(GBK)，UTF-8 编码的 bat 就会乱。安装器已经自动把 cmd 标签改成 UTF-8 启动；反之 GBK 编码的老 bat 会乱，用记事本另存为 UTF-8 即可。
+
+**设置了背景图但 PowerShell 标签看不到？**
+多半是单个配置文件里写了 `backgroundImage: null` 覆盖了全局默认。工具现在会自动清除这类覆盖。
+
+**背景图让透明感消失？**
+图片和窗口透明度是两个独立图层，叠加后 ≈ `窗口 + 图片×(1-窗口)`。用 `-bg-opacity` 调低图片浓淡即可。
+
+**我换了图，终端没刷新？**
+图片按内容哈希命名，换图会换文件名。若缓存未刷新，重启终端一次。
+
+**杀软报毒？**
+未签名 PyInstaller 产物常见误报。可以自行 `python install.py` 运行源码，或按 [README_SIGN.md](README_SIGN.md) 签名。
+
+**exe 没签名？**
+是。签名路线见 [README_SIGN.md](README_SIGN.md)（个人最现实的是 Certum OSS 或 SignPath）。
+
+## 仓库结构
+
+```
+├─ terminal-setup.src.cmd      模板：批处理头 + PowerShell 正文（不含字体数据）
+├─ adaptive-watch.ps1          自适应前景色守护（base64 内嵌进成品）
+├─ install.py                  安装器源码
+├─ build_package.py            打包：模板 + 字体 -> terminal-setup.cmd
+├─ make_dist.py                生成 dist\CLBT.zip
+├─ make_icon.py                生成图标（多尺寸 ICO）
+├─ make_italic_family.py       把斜体样式改造成独立字体家族
+├─ refresh_adaptive.py         修改守护脚本后刷新内嵌 base64
+├─ sign.cmd / version_info.txt 签名与版本信息
+├─ *.ttf                       0xProto Nerd Font（SIL OFL 1.1，见 LICENSE）
+├─ italic-family\              改造出的斜体独立家族
+└─ screenshots\                文档截图
+```
+
+⚠️ 成品 `terminal-setup.cmd` 是**构建产物**（33 MB，含 base64 字体），已加入 `.gitignore`，请用 `build_package.py` 生成。
+
+## 许可
+
+- **工具本体（脚本/代码）**：MIT
+- **字体**：SIL Open Font License 1.1，Copyright (c) 2023, 0xType Project Authors，详见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)
+
+> 本项目修改过字体（把 Mono Italic 重命名为独立家族 `0xProto Mono Italic`），衍生字体同样以 OFL 1.1 发布。

@@ -1,0 +1,40 @@
+﻿发布到 GitHub 的操作步骤
+========================
+
+一、准备（已完成）
+  本文件夹 D:\CLBT-Win 里只有该提交进 git 的源码与资源（约 25 MB，主要是字体）。
+  发布资产（install.exe / CLBT.zip）在 D:\CLBT-Release，单独上传到 Releases。
+
+二、网页上传（不需要装 git）
+  1. 打开 https://github.com/new
+     - Repository name: CLBT-Win
+     - Description: Windows Terminal 美化工具：仿 Linux 黑玻璃终端 / 自适应前景色 / 单文件安装
+     - Public，不要勾选 Add a README（我们已经有了）
+     - Create repository
+  2. 新仓库页面点 "uploading an existing file"
+  3. 打开 D:\CLBT-Win，全选里面的文件和文件夹（Ctrl+A），拖进网页
+     ⚠ 拖的是「里面」，不要拖 D:\CLBT-Win 这个文件夹本身
+  4. Commit changes，提交信息填: feat: CLBT v1.0.0
+  5. 进 Releases -> "Draft a new release"
+     - Choose a tag: v1.0.0（点 Create new tag）
+     - Release title: CLBT v1.0.0
+     - 描述: 复制 CHANGELOG.md 里 v1.0.0 的内容
+     - 附件: 上传 D:\CLBT-Release\install.exe 和 CLBT.zip
+     - Publish release
+
+三、用 git 上传（可选，需先安装 git）
+  winget install --id Git.Git
+  cd /d D:\CLBT-Win
+  git init
+  git add -A
+  git commit -m "feat: CLBT v1.0.0"
+  git branch -M main
+  git remote add origin https://github.com/<你的用户名>/CLBT-Win.git
+  git push -u origin main
+
+四、检查清单
+  [ ] README 里的截图能正常显示（screenshots/ 已包含）
+  [ ] LICENSE（字体 OFL 1.1）和 NOTICE.md 都在根目录
+  [ ] Releases 里有两个附件：install.exe、CLBT.zip
+  [ ] README 顶部的 Releases 链接可用
+  [ ] 仓库里没有 terminal-setup.cmd（33MB 构建产物）
