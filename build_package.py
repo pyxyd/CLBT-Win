@@ -80,6 +80,24 @@ def main():
     if not template.endswith("\n"):
         template += "\n"
 
+    # 批处理区（#::PS1:: 标记行之前）必须纯 ASCII：
+    # 在 chcp 65001 的控制台里，cmd 解析含多字节字符的批处理会算错行偏移，
+    # goto 落到行中间，把注释片段当命令执行
+    #（现象：'5)' is not recognized as an internal or external command）。
+    lines = template.splitlines()
+    marks = [i for i, ln in enumerate(lines) if ln.strip() == PS1_MARK]
+    if not marks:
+        sys.exit(f"模板里找不到 {PS1_MARK} 标记行")
+    head = lines[:marks[-1]]
+    bad = [(i + 1, ln) for i, ln in enumerate(head) if any(ord(c) > 127 for c in ln)]
+    if bad:
+        print("错误: 批处理区（标记行之前）出现了非 ASCII 字符。")
+        print("      chcp 65001 下 cmd 会算错行偏移，把注释片段当命令执行。")
+        print("      请把这些文字挪进 PowerShell 正文，或用英文注释：")
+        for n, ln in bad[:10]:
+            print(f"      行 {n}: {ln[:90]}")
+        sys.exit(1)
+
     fonts = collect_fonts(slim)
     if not fonts:
         sys.exit("没有找到任何 .ttf 字体文件")

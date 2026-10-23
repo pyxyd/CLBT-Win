@@ -1,5 +1,26 @@
 # 更新日志
 
+## v1.0.2
+
+### 修复（重要）
+- 在**已经是 UTF-8（`chcp 65001`）的 cmd** 里运行任意 `CLBT` 命令（`-encoding on`、
+  `-help`、`-linux` 都一样），开头会先冒出几行
+  ```
+  '--apply' is not recognized as an internal or external command,
+  '5)' is not recognized as an internal or external command,
+  ```
+  原因：批处理区（`#::PS1::` 标记之前）里有中文注释、中文 `title` 和中文 `echo`。
+  控制台处于代码页 65001 时，cmd 按「字符数」推算行偏移，多字节字符让偏移算错，
+  `goto :label` 落到行中间，于是注释片段被当成命令执行了。
+- 批处理区现在**全部改写成 ASCII 英文注释**；中文窗口标题改为在 PowerShell 正文里
+  用 `$Host.UI.RawUI.WindowTitle` 设置；双击提示语改为 `Press any key to exit`。
+- `build_package.py` 增加构建期检查：批处理区一旦出现非 ASCII 字符，直接报错退出，
+  避免以后再踩回去。
+
+### 说明
+- 用管道/重定向（没有真实控制台）调用时看不到这个现象，只有在终端窗口里才会复现；
+  起始代码页为 936 时也不复现，所以它只在「UTF-8 终端」里暴露。
+
 ## v1.0.1
 
 ### 安装位置

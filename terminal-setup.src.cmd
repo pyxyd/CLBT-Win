@@ -1,25 +1,34 @@
 @echo off
 rem  ====================================================================
-rem   Windows 命令行美化工具（内置字体的单文件版）
+rem   CLBT - Windows command line beautifier (single file with fonts)
 rem
-rem   用法：双击运行，或  terminal-setup.cmd /y      （/y 跳过结尾暂停）
-rem         terminal-setup.cmd --apply "<字体名>" /y  （静默应用，供内部调用）
-rem         terminal-setup.cmd --undo-cmd /y          （移除 cmd 的仿 Linux 提示符）
+rem   Usage: double-click it, or  terminal-setup.cmd /y   (/y = no pause)
+rem          terminal-setup.cmd --apply "<face>" /y      (silent apply)
+rem          terminal-setup.cmd --undo-cmd /y            (remove cmd prompt)
 rem
 rem   ------------------------------------------------------------------
-rem   !! 维护注意 !! 本文件是「批处理 + 内嵌 PowerShell 正文 + 内嵌字体数据」
-rem      的单文件结构：
-rem      1) 行尾必须是 CRLF。若是 LF，goto/exit 会失效，cmd 会把内嵌正文
-rem         当批处理命令执行，报一堆奇怪的语法错误。
-rem      2) 编码用 UTF-8（不需要 BOM）。
-rem      3) 两个正文标记行（PS1 / FONTS）各自只允许出现一整行。
-rem      4) 正文代码里禁止出现标记串的字面量（启动命令按字符串定位会被截断），
-rem         需要比较时用拼接构造。
-rem      5) 字体数据由 build_package.py 追加，不要手工编辑。
+rem   !! MAINTENANCE NOTES !!
+rem   This file is one batch file carrying an embedded PowerShell payload
+rem   plus embedded font data:
+rem     1) Line endings MUST be CRLF. With LF, goto/exit break and cmd
+rem        executes the payload as batch commands (weird syntax errors).
+rem     2) Encoding is UTF-8 (no BOM needed).
+rem     3) Each payload marker line (PS1 / FONTS) must appear exactly once.
+rem     4) The payload must never contain the marker string literally: the
+rem        launcher locates it by string search. Build it by concatenation.
+rem     5) Font data is appended by build_package.py; do not edit by hand.
+rem   ------------------------------------------------------------------
+rem   !! KEEP THE BATCH REGION PURE ASCII !!
+rem   Non-ASCII text here (Chinese comments, a localized title, ...) breaks
+rem   cmd's own line bookkeeping once the console runs at code page 65001:
+rem   "goto :label" then lands mid-line and stray fragments get executed as
+rem   commands, e.g.  '5)' is not recognized as an internal or external
+rem   command. Keep every line up to the PS1 marker ASCII-only; put all
+rem   non-ASCII text inside the PowerShell payload, which is read as UTF-8.
 rem   ====================================================================
 setlocal
 chcp 65001 >nul 2>&1
-title Windows 命令行美化工具
+title CLBT - Windows Command Line Beautify
 set "WT_SELF=%~f0"
 set "WT_SELF_DIR=%~dp0"
 set "WT_MODE="
@@ -72,7 +81,7 @@ if /i "%~1"=="--style" goto :arg_style
 if /i "%~1"=="--apply" goto :arg_apply
 if /i "%~1"=="--undo-cmd" goto :arg_undo
 if /i "%~1"=="/y" goto :arg_nopause
-rem 未知参数：报错退出，避免拼错参数时静默改配置
+rem unknown argument: fail fast so a typo never silently rewrites settings
 set "WT_MODE=badarg"
 set "WT_BADARG=%~1"
 goto :launch
@@ -208,7 +217,7 @@ set "WT_RC=%ERRORLEVEL%"
 echo.
 if defined WT_MODE goto :done
 if defined WT_NOPAUSE goto :done
-echo  按任意键退出 . . .
+echo  Press any key to exit . . .
 pause >nul
 :done
 endlocal & exit /b %WT_RC%
@@ -226,6 +235,9 @@ endlocal & exit /b %WT_RC%
 # =====================================================================
 
 $ErrorActionPreference = 'Stop'
+
+# 标题用中文显示（批处理区必须是纯 ASCII，所以在这里设窗口标题）
+try { $Host.UI.RawUI.WindowTitle = 'Windows 命令行美化工具' } catch { }
 
 $MARK_FONTS = ('#::' + 'FONTS' + '::')   # 拼接构造：正文里不能出现字面量
 
