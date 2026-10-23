@@ -12,9 +12,9 @@ README = """CLBT —— Windows 命令行美化工具
 只需要一个文件：install.exe（工具本体已经打包在它里面）。
 
 安装：
-  1. 把 install.exe 放到你想安装的文件夹（比如 D:\\Tools\\CLBT）
-  2. 双击运行
-     它会自动写出 terminal-setup.cmd、生成 CLBT.cmd、并把该文件夹加入用户 PATH
+  1. 双击 install.exe（会弹一次 UAC，因为默认装到 C:\\Program Files\\CLBT）
+  2. 它会自动写出 terminal-setup.cmd、生成 CLBT.cmd、并把该目录加入用户 PATH
+     想装到别处、不要管理员权限：install.exe --dir D:\\Tools\\CLBT
   3. 重新打开终端（重要，PATH 才会生效）
   4. 输入  CLBT -help  查看用法
 
@@ -29,7 +29,7 @@ README = """CLBT —— Windows 命令行美化工具
   CLBT -adaptive off                关闭自适应前景色
   CLBT -encoding on|off             让 cmd 标签以 UTF-8 启动（消除 bat 中文乱码）
   CLBT -uninstall                   撤回对命令行的修改（外观/提示符/cmd 挂钩/自适应）
-  install.exe --uninstall           卸载命令本身（清除 PATH + 删除 CLBT.cmd）
+  install.exe --uninstall           卸载命令本身（清除 PATH + 删除 C:\\Program Files\\CLBT 里的文件）
 
 两个口径别搞混：
   -transparent N    N 是「透明度」：0 = 完全不透明，100 = 全透
@@ -42,8 +42,10 @@ README = """CLBT —— Windows 命令行美化工具
   安装器把工具打包在 exe 内部，释放时总是正确的字节，彻底避免这个问题。
 
 注意：
-  · 安装器只写当前用户 PATH（HKCU），不需要管理员权限
-  · 它只改用户 PATH，不动系统 PATH，重复运行不会产生重复项
+  · 默认安装目录是 C:\\Program Files\\CLBT，写入需要一次 UAC 授权
+  · 用 --dir 指到当前用户可写的目录就完全不需要管理员权限
+  · 只改用户 PATH（HKCU），不动系统 PATH，重复运行不会产生重复项
+  · 装到新位置时会自动清理旧位置的 CLBT.cmd / terminal-setup.cmd（--keep-old 可保留）
   · 已存在的同名文件会先备份为 .bak
 """
 

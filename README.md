@@ -2,7 +2,8 @@
 
 > 一条命令，把 Windows Terminal 变成仿 Linux 的黑玻璃终端；再一条命令，还原成 Windows 原生。
 
-- **单文件分发**：`install.exe`（25 MB）自带 10 个 Nerd Font 字体，双击即装，不需要管理员权限
+- **单文件分发**：`install.exe`（25 MB）自带 10 个 Nerd Font 字体，双击即装
+- **标准安装位置**：默认装进 `C:\Program Files\CLBT`，`--dir` 可改到任意目录
 - **两种风格**：仿 Linux（黑色亚克力 + bash 提示符）/ Windows 原生
 - **背景图 + 透明度**：图片按"水印"强度自动跟随窗口透明度，互不打架
 - **自适应前景色**：窗口透明时，按周围背景明暗自动切换深/浅色文字
@@ -17,15 +18,16 @@
 ### 方式一：用现成的安装器（推荐）
 
 1. 从 [Releases](../../releases) 下载 `CLBT.zip`（唯一附件，安装器就在里面）
-2. 解压，把 `CLBT\install.exe` 放到一个固定目录（例如 `D:\Tools\CLBT`），双击运行
+2. 解压，双击 `CLBT\install.exe` —— 它会装到 `C:\Program Files\CLBT`，途中弹一次 UAC 授权
+   想装到别处（不需要管理员）：`install.exe --dir D:\Tools\CLBT`
 3. 重新打开终端，输入 `CLBT -help`
 
 安装器会做四件事：
 
 | 动作 | 说明 |
 |---|---|
-| 释放工具本体 | 写出 `terminal-setup.cmd`（33 MB，内含字体） |
-| 生成入口命令 | 写出 `CLBT.cmd` |
+| 释放工具本体 | 写出 `C:\Program Files\CLBT\terminal-setup.cmd`（33 MB，内含字体） |
+| 生成入口命令 | 写出 `C:\Program Files\CLBT\CLBT.cmd` |
 | 加入用户 PATH | 只写 `HKCU`，不影响系统 PATH，重复运行不产生重复项 |
 | 开启 UTF-8 | 把 Terminal 里 cmd 标签的 commandline 改成 `cmd.exe /k chcp 65001 >nul` |
 
@@ -93,17 +95,18 @@ CLBT -help                             显示帮助
 | `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_*\LocalState\settings.json` | 配色、透明度、背景图、字体、光标等 | `CLBT -uninstall`（自动备份 `.bak-*`） |
 | `%USERPROFILE%\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1` | 仿 Linux 提示符 + 键位 | 同上（删除本工具生成的 profile） |
 | `%LOCALAPPDATA%\Microsoft\Windows\Fonts` + `HKCU\...\Fonts` | 按当前用户安装字体 | 手动删除 |
-| `HKCU\Environment\Path` | 加入安装目录 | `install.exe --uninstall` |
+| `HKCU\Environment\Path` | 加入 `C:\Program Files\CLBT` | `install.exe --uninstall` |
+| `C:\Program Files\CLBT\` | 安装目录（`terminal-setup.cmd` + `CLBT.cmd`） | `install.exe --uninstall` |
 | `HKCU\Software\Microsoft\Command Processor\AutoRun` | **仅在交互里选 y 时**写入，用于 cmd 提示符 | `CLBT -adaptive off` / `CLBT -uninstall` |
 | Terminal 中 cmd 配置的 `commandline` | 追加 `/k chcp 65001 >nul` | `CLBT -encoding off` |
 
-**不需要管理员权限**，不修改系统级设置（不动 `HKLM`）。
+默认目录在 `C:\Program Files` 下，所以安装时要过一次 UAC；除此之外只写文件 + `HKCU`，不修改系统级设置（不动 `HKLM`）。想全程免提权就用 `--dir` 指到当前用户可写的位置。
 
 ## 卸载
 
 ```bat
-CLBT -uninstall          :: 撤回外观/提示符/cmd 挂钩/自适应，字体文件保留
-install.exe --uninstall  :: 彻底卸载命令本身（清 PATH + 删 CLBT.cmd）
+CLBT -uninstall          :: 撤回外观/提示符/cmd 挂钩/自适应，字体与工具本体保留
+install.exe --uninstall  :: 彻底卸载命令本身（清 PATH + 删 C:\Program Files\CLBT 里的文件）
 ```
 
 ## 常见问题

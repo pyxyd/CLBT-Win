@@ -1,4 +1,17 @@
-﻿# 更新日志
+# 更新日志
+
+## v1.0.1
+
+### 安装位置
+- 默认安装目录改为 `C:\Program Files\CLBT`（原来是 install.exe 自己所在的目录）
+- 写入 Program Files 需要管理员权限，安装器会自动请求 UAC 提权，结果在管理员窗口里显示
+- `--dir` 仍可装到任意目录；指到当前用户可写的位置就完全不需要管理员
+- 装到新位置时自动清理旧位置的 `CLBT.cmd` / `terminal-setup.cmd` 并从 PATH 移除，避免旧路径抢先命中旧版本（`--keep-old` 可保留旧的）
+- `--uninstall` 现在会连 `terminal-setup.cmd`（33 MB）和空目录一起清掉，并清理 PATH 里所有装过 CLBT 的目录
+
+### 分发
+- Release 只挂一个 `CLBT.zip`（安装器在包内），不再单独放 `install.exe`
+- 安装器版本号 1.0.1.0
 
 ## v1.0.0
 
