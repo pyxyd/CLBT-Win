@@ -16,8 +16,8 @@
 
 ### 方式一：用现成的安装器（推荐）
 
-1. 从 [Releases](../../releases) 下载 `install.exe`
-2. 放到一个固定目录（例如 `D:\Tools\CLBT`），双击运行
+1. 从 [Releases](../../releases) 下载 `CLBT.zip`（唯一附件，安装器就在里面）
+2. 解压，把 `CLBT\install.exe` 放到一个固定目录（例如 `D:\Tools\CLBT`），双击运行
 3. 重新打开终端，输入 `CLBT -help`
 
 安装器会做四件事：
