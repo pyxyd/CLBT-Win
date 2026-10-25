@@ -1,5 +1,19 @@
 # 更新日志
 
+## v1.0.4
+
+### 图形界面进入发布包
+- `install.exe` 现在同时释放三件东西到 `C:\Program Files\CLBT`：
+  `terminal-setup.cmd`（本体）、`CLBT.cmd`（入口）、**`CLBT-GUI.exe`**（11 MB，双击即用，不需要 Python）
+- 新增 `CLBT -gui`：直接打开图形界面
+- `install.exe --uninstall` 会把 GUI 一起清掉
+- 分发包 `CLBT.zip` 从 25 MB 变成 36 MB，但仍只有一个附件、一个安装器
+
+### 打包细节
+- GUI 用 `--manifest gui.manifest` 声明 per-monitor DPI 感知；再按 `GetDpiForMonitor` 自行缩放，
+  125% / 150% 缩放下窗口尺寸和字号都正确（原先会偏小）
+- GUI 的界面尺寸按内容自适应，最小 1060×800，超出屏幕时按屏幕收窄
+
 ## v1.0.3
 
 ### 新增

@@ -24,12 +24,13 @@
    想装到别处（不需要管理员）：`install.exe --dir D:\Tools\CLBT`
 3. 重新打开终端，输入 `CLBT -help`
 
-安装器会做四件事：
+安装器会做这几件事：
 
 | 动作 | 说明 |
 |---|---|
 | 释放工具本体 | 写出 `C:\Program Files\CLBT\terminal-setup.cmd`（33 MB，内含字体） |
 | 生成入口命令 | 写出 `C:\Program Files\CLBT\CLBT.cmd` |
+| 装上图形界面 | 写出 `C:\Program Files\CLBT\CLBT-GUI.exe`（11 MB，双击即可用） |
 | 加入用户 PATH | 只写 `HKCU`，不影响系统 PATH，重复运行不产生重复项 |
 | 开启 UTF-8 | 把 Terminal 里 cmd 标签的 commandline 改成 `cmd.exe /k chcp 65001 >nul` |
 
@@ -63,6 +64,8 @@ CLBT -bg-align topLeft                 对齐：center/top/bottom/left/right/top
 CLBT -bg-stretch uniform               拉伸：uniformToFill/fill/uniform/none
 
 CLBT -font "D:\fonts\my.ttf"           安装并使用指定字体（文件或目录）
+CLBT -face "0xProto Nerd Font Mono"     直接用已安装的字族（不用传文件路径）
+CLBT -install-fonts                    只安装内置的 10 个字体，不改任何设置
 CLBT -cell-height 1.2                  行高 0.8–2.0
 CLBT -antialiasing grayscale           抗锯齿：grayscale/cleartype/aliased
 CLBT -adjust-colors always             不可辨颜色修正：always/indexed/never
@@ -71,6 +74,7 @@ CLBT -adaptive                         开启自适应前景色
 CLBT -adaptive off                     关闭
 CLBT -encoding on|off                  让 cmd 标签以 UTF-8 启动（消除 bat 乱码）
 
+CLBT -gui                              打开图形界面（等价双击 CLBT-GUI.exe）
 CLBT -uninstall                        撤回对命令行的全部修改
 CLBT -help                             显示帮助
 ```
@@ -94,6 +98,14 @@ CLBT -help                             显示帮助
 
 不想敲参数就开图形界面：
 
+**已经装好的人**直接双击 `C:\Program Files\CLBT\CLBT-GUI.exe`，或者在终端里：
+
+```bat
+CLBT -gui
+```
+
+**从源码跑**：
+
 ```bat
 python clbt_gui.py
 ```
@@ -108,6 +120,7 @@ python clbt_gui.py
   `-face` 或字体文件 `-font`）、行高、抗锯齿、不可辨色、UTF-8 编码、自适应前景色，
   以及「恢复 Windows 原生 / 撤回外观修改 / 移除 cmd 提示符 / 卸载命令行入口」
 - `python clbt_gui.py --selftest` 只打印将要执行的命令，不开窗口
+- 打包 exe 时用 `--manifest gui.manifest`（per-monitor DPI 感知），125% / 150% 缩放下不发虚
 
 ## 它会修改什么（透明披露）
 

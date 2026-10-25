@@ -45,6 +45,7 @@ if getattr(sys, "frozen", False):
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL_NAME = "terminal-setup.cmd"
+GUI_NAME = "CLBT-GUI.exe"
 CLBT_NAME = "CLBT.cmd"
 
 # 默认安装目录：C:\Program Files\CLBT（跟其它 Windows 程序放一起）
@@ -269,6 +270,16 @@ def bundled_tool_path():
     return os.path.join(HERE, TOOL_NAME), False
 
 
+def bundled_gui_path():
+    """返回安装器里带的图形界面 exe（没带则返回不存在路径）"""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        p = os.path.join(meipass, GUI_NAME)
+        if os.path.isfile(p):
+            return p
+    return os.path.join(HERE, GUI_NAME)
+
+
 def ensure_crlf(path):
     """把批处理文件的行尾规范成 CRLF。
     LF 行尾会让 cmd 把内嵌的 PowerShell 正文当成命令执行，
@@ -291,7 +302,7 @@ def ensure_crlf(path):
 def remove_tool_files(directory, verbose=True):
     """删掉某目录里的 CLBT.cmd / terminal-setup.cmd（及其 .bak 备份）"""
     removed = []
-    for name in (CLBT_NAME, TOOL_NAME):
+    for name in (CLBT_NAME, TOOL_NAME, GUI_NAME):
         p = os.path.join(directory, name)
         for f in [p] + glob.glob(p + ".bak*"):
             if os.path.isfile(f):
@@ -374,6 +385,19 @@ def do_install(target_dir, do_encoding=True, keep_old=False):
         how = "从安装器内释放" if embedded else "已复制"
         say(f"    {how}: {dst_tool}  ({src_size / 1048576:.2f} MB)")
 
+    # 图形界面（install.exe 里带了就一起装）
+    gui_src = bundled_gui_path()
+    if os.path.isfile(gui_src):
+        gui_dst = os.path.join(target_dir, GUI_NAME)
+        try:
+            if os.path.isfile(gui_dst) and os.path.getsize(gui_dst) == os.path.getsize(gui_src):
+                say(f"    图形界面已是最新，跳过: {gui_dst}")
+            else:
+                shutil.copy2(gui_src, gui_dst)
+                say(f"    图形界面: {gui_dst}  ({os.path.getsize(gui_src) / 1048576:.2f} MB)")
+        except Exception as e:
+            say(f"    [!] 图形界面写入失败: {e}")
+
     # 行尾自检：LF 会让 cmd 误执行内嵌脚本
     if ensure_crlf(dst_tool):
         say("    已修正行尾为 CRLF（原文件是 LF，会导致 cmd 报一堆「不是内部或外部命令」）")
@@ -443,6 +467,7 @@ def do_install(target_dir, do_encoding=True, keep_old=False):
     say("    CLBT -win")
     say("    CLBT -transparent 50 -linux")
     say()
+    say("图形界面：双击 " + os.path.join(target_dir, GUI_NAME) + "　或命令行输入 CLBT -gui")
     say(f"卸载：{os.path.basename(sys.executable)} --uninstall")
     return 0
 

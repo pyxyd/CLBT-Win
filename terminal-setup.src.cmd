@@ -63,6 +63,7 @@ if /i "%~1"=="--font" goto :arg_font
 if /i "%~1"=="-face" goto :arg_face
 if /i "%~1"=="--face" goto :arg_face
 if /i "%~1"=="-install-fonts" goto :arg_ifonts
+if /i "%~1"=="-gui" goto :arg_gui
 if /i "%~1"=="--install-fonts" goto :arg_ifonts
 if /i "%~1"=="-opacity" goto :arg_opacity
 if /i "%~1"=="--opacity" goto :arg_opacity
@@ -130,6 +131,14 @@ goto :parse
 :arg_ifonts
 set "WT_MODE=installfonts"
 goto :launch
+
+:arg_gui
+if exist "%~dp0CLBT-GUI.exe" goto :arg_gui_run
+echo CLBT-GUI.exe not found next to this script -- run install.exe first.
+exit /b 1
+:arg_gui_run
+start "" "%~dp0CLBT-GUI.exe" >nul 2>&1
+exit /b 0
 
 :arg_trans
 set "WT_MODE=cli"
@@ -1487,6 +1496,7 @@ function Show-CliHelp {
     Write-Host '    CLBT -font "<字体文件路径>"    安装并使用指定字体（.ttf/.otf/.ttc，或目录）' -ForegroundColor Gray
     Write-Host '    CLBT -face "<字体族名>"        直接用已安装的字族（如 0xProto Nerd Font Mono）' -ForegroundColor Gray
     Write-Host '    CLBT -install-fonts          只安装内置的 10 个字体，不改任何设置' -ForegroundColor Gray
+    Write-Host '    CLBT -gui                    打开图形界面（等同于双击 CLBT-GUI.exe）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive                开启自适应前景色（透明时按背景明暗切字体深浅）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive off            关闭自适应前景色' -ForegroundColor Gray
     Write-Host '    CLBT -uninstall               撤回对命令行的修改（外观/提示符/cmd 挂钩还原）' -ForegroundColor Gray

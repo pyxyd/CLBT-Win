@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -166,6 +166,36 @@ def set_dpi_aware():
             pass
 
 
+def window_scale(root):
+    """当前显示器缩放（1.0 = 100%）。
+    优先问 GetDpiForMonitor（窗口还没显示时也能拿到正确值），
+    因为 per-monitor 感知的进程里 Tk 从 GetDeviceCaps 拿到的始终是 96。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        MONITOR_DEFAULTTOPRIMARY = 1
+        mon = ctypes.windll.user32.MonitorFromPoint(wintypes.POINT(0, 0), MONITOR_DEFAULTTOPRIMARY)
+        dx, dy = ctypes.c_uint(), ctypes.c_uint()
+        ctypes.windll.shcore.GetDpiForMonitor(mon, 0, ctypes.byref(dx), ctypes.byref(dy))
+        if dx.value:
+            return dx.value / 96.0, float(dx.value)
+    except Exception:
+        pass
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+        dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+        if dpi and dpi != 96:
+            return dpi / 96.0, float(dpi)
+    except Exception:
+        pass
+    try:
+        dpi = root.winfo_fpixels("1i")
+        return dpi / 96.0, dpi
+    except Exception:
+        return 1.0, 96.0
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -176,10 +206,11 @@ class App:
 
         root.title(f"{APP_TITLE}  v{VERSION}")
         root.configure(bg=BG)
+        self.dpi, dpi_px = window_scale(root)
         try:
-            self.dpi = max(1.0, root.winfo_fpixels("1i") / 96.0)
+            root.tk.call("tk", "scaling", dpi_px / 72.0)
         except Exception:
-            self.dpi = 1.0
+            pass
         root.geometry(f"{int(1060 * self.dpi)}x{int(800 * self.dpi)}")
         root.minsize(int(1000 * self.dpi), int(740 * self.dpi))
 
@@ -189,8 +220,8 @@ class App:
         self._refresh_status()
         # 按内容自适应窗口大小，避免控件被裁掉；再给自己的下限
         self.root.update_idletasks()
-        w = max(int(1040 * self.dpi), self.root.winfo_reqwidth() + 10)
-        h = max(int(760 * self.dpi), self.root.winfo_reqheight() + 10)
+        w = max(int(1060 * self.dpi), self.root.winfo_reqwidth() + 10)
+        h = max(int(800 * self.dpi), self.root.winfo_reqheight() + 10)
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         self.root.geometry(f"{min(w, sw - 40)}x{min(h, sh - 80)}")
         self.root.after(60, self._drain)
@@ -705,52 +736,56 @@ def selftest():
     return 0
 
 
+def diag(path):
+    """把 DPI / 环境诊断写到文件（--noconsole 打包后看不到 stdout，调试用）"""
+    import ctypes
+    lines = []
+    try:
+        r = ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        lines.append(f"SetProcessDpiAwareness(2) -> {r}")
+    except Exception as e:
+        lines.append(f"SetProcessDpiAwareness err: {e}")
+    try:
+        aw = ctypes.c_int()
+        ctypes.windll.shcore.GetProcessDpiAwareness(None, ctypes.byref(aw))
+        lines.append(f"process awareness = {aw.value} (0=unaware 1=system 2=permonitor)")
+    except Exception as e:
+        lines.append(f"GetProcessDpiAwareness err: {e}")
+    try:
+        from ctypes import wintypes
+        mon = ctypes.windll.user32.MonitorFromPoint(wintypes.POINT(0, 0), 1)
+        dx, dy = ctypes.c_uint(), ctypes.c_uint()
+        r = ctypes.windll.shcore.GetDpiForMonitor(mon, 0, ctypes.byref(dx), ctypes.byref(dy))
+        lines.append(f"GetDpiForMonitor -> {r} {dx.value}x{dy.value}")
+    except Exception as e:
+        lines.append(f"GetDpiForMonitor err: {e}")
+    try:
+        lines.append(f"GetDpiForSystem = {ctypes.windll.user32.GetDpiForSystem()}")
+    except Exception as e:
+        lines.append(f"GetDpiForSystem err: {e}")
+    root = tk.Tk()
+    try:
+        lines.append(f"window_scale(root) = {window_scale(root)}")
+    except Exception as e:
+        lines.append(f"window_scale err: {e!r}")
+    lines.append(f"winfo_fpixels(1i) = {root.winfo_fpixels('1i'):.2f}")
+    lines.append(f"tk screen = {root.winfo_screenwidth()}x{root.winfo_screenheight()}")
+    root.destroy()
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return 0
+
+
 def main():
+    if "--diag" in sys.argv:
+        set_dpi_aware()
+        return diag(sys.argv[sys.argv.index("--diag") + 1])
     if "--selftest" in sys.argv:
         return selftest()
 
     set_dpi_aware()
     root = tk.Tk()
     app = App(root)
-
-    # 调试用：--shot <png> 把自己的窗口截图后退出（这条路径才需要 Pillow）
-    if "--shot" in sys.argv:
-        path = sys.argv[sys.argv.index("--shot") + 1]
-        root.attributes("-topmost", True)
-        root.lift()
-        # 塞一段真实运行输出，截图里能看到日志区的样子
-        for line, tag in (
-            ("$ CLBT -linux -transparent 64 -face 0xProto Mono Italic -background <图片> -bg-opacity 0.22 /y", "cmd"),
-            ("  （应用外观）", "dim"),
-            ("[1/3] 终端外观", "title"),
-            ("  [OK]   已备份: settings.json.bak-20261025-213152", "ok"),
-            ("  [OK]   背景图浓淡: 0.22（窗口不透明度 36%）", "ok"),
-            ("  [OK]   外观已写入（黑色亚克力 36%、方块光标、Tango 配色）", "ok"),
-            ("  [OK]   字体: 0xProto Mono Italic", "ok"),
-            ("[2/3] 提示符与键位", "title"),
-            ("  [OK]   profile: Microsoft.PowerShell_profile.ps1", "ok"),
-            ("[3/3] 执行策略与字体", "title"),
-            ("  [OK]   字体：新安装 0 个，已存在跳过 10 个", "ok"),
-            ("  完成：仿 Linux 风格，透明度 64%（不透明度 36%）", "ok"),
-            ("  ✔ 完成，新开一个终端标签页生效", "ok"),
-        ):
-            app.log(line, tag)
-
-        def grab():
-            try:
-                from PIL import ImageGrab
-                root.update_idletasks()
-                x, y = root.winfo_rootx(), root.winfo_rooty()
-                w, h = root.winfo_width(), root.winfo_height()
-                x0, y0 = max(0, x - 9), max(0, y - 38)
-                ImageGrab.grab(bbox=(x0, y0, x + w + 9, y + h + 9), all_screens=True).save(path)
-                print("saved", path, w, h)
-            except Exception as e:  # noqa: BLE001
-                print("shot failed:", e)
-            app.q.put(("done", 0))
-            root.destroy()
-
-        root.after(1600, grab)
 
     root.mainloop()
     return 0

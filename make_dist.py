@@ -13,13 +13,14 @@ README = """CLBT —— Windows 命令行美化工具
 
 安装：
   1. 双击 install.exe（会弹一次 UAC，因为默认装到 C:\\Program Files\\CLBT）
-  2. 它会自动写出 terminal-setup.cmd、生成 CLBT.cmd、并把该目录加入用户 PATH
+  2. 它会写出 terminal-setup.cmd、CLBT.cmd、CLBT-GUI.exe（图形界面），并把该目录加入 PATH
      想装到别处、不要管理员权限：install.exe --dir D:\\Tools\\CLBT
   3. 重新打开终端（重要，PATH 才会生效）
   4. 输入  CLBT -help  查看用法
 
 常用命令：
   CLBT                              交互式菜单
+  CLBT -gui                         打开图形界面（等价于双击 CLBT-GUI.exe）
   CLBT -linux                       仿 Linux：黑色亚克力 + bash 提示符
   CLBT -win                         Windows 原生风格
   CLBT -transparent 36              透明度 36%（即不透明度 64%）
