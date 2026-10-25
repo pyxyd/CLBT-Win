@@ -440,6 +440,12 @@ def do_install(target_dir, do_encoding=True, keep_old=False):
                 say(f"    [!] 旧安装仍在: {o}（--keep-old 已保留，命令行可能命中旧版本）")
         else:
             for o in olds:
+                # 旧目录可能在没有权限的地方（例如 Program Files）：先探一下再动，
+                # 否则会「文件删不掉但 PATH 已经移除」，命令直接消失
+                if not _can_write(o):
+                    say(f"    [!] 旧安装 {o} 需要管理员权限才能清理，已跳过（PATH 保持不变）")
+                    say("        想清掉它，用管理员身份再跑一次本安装器，或执行 install.exe --uninstall")
+                    continue
                 say(f"    发现旧安装，正在清理: {o}")
                 remove_tool_files(o)
                 cur2, typ2 = user_path_get()
@@ -476,24 +482,34 @@ def do_uninstall(target_dir):
     target_dir = os.path.abspath(target_dir)
     say(f"    安装目录: {target_dir}")
 
-    # 1) PATH 里所有「装过 CLBT」的目录都清掉
+    # 1) PATH 里所有「装过 CLBT」的目录都清掉（没权限的跳过，别把 PATH 弄空）
     cur, typ = user_path_get()
     entries = path_entries(cur)
     dead = [e for e in entries
             if normalize(e) == normalize(target_dir)
             or os.path.isfile(os.path.join(e, CLBT_NAME))]
-    if not dead:
-        say("    PATH 中没有该目录，跳过")
+    removable, skipped = [], []
+    for d in dead:
+        if normalize(d) != normalize(target_dir) and not _can_write(d):
+            skipped.append(d)
+        else:
+            removable.append(d)
+
+    if not removable:
+        say("    PATH 中没有可清理的目录")
     else:
-        kept = [e for e in entries if e not in dead]
+        kept = [e for e in entries if e not in removable]
         user_path_set(";".join(kept), typ)
-        for d in dead:
+        for d in removable:
             say(f"    已从用户 PATH 移除: {d}")
+    for d in skipped:
+        say(f"    [!] {d} 需要管理员权限才能清理，已跳过（PATH 保持不变）")
+        say("        想清掉它，用管理员身份重跑：install.exe --uninstall")
 
     # 2) 删掉工具文件（含旧位置的残留副本）
-    dirs = {target_dir} | {d for d in dead if os.path.isdir(d)}
-    for d in sorted(dirs):
-        remove_tool_files(d)
+    for d in sorted(set(removable) | {target_dir}):
+        if os.path.isdir(d):
+            remove_tool_files(d)
 
     # 3) 目录空了就一起删掉
     try:
