@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -52,11 +52,34 @@ FAMILIES = [
     "0xProto Nerd Font Mono",
     "0xProto Nerd Font Propo",
 ]
-ALIGNS = ["center", "top", "bottom", "left", "right",
-          "topLeft", "topRight", "bottomLeft", "bottomRight"]
-STRETCHES = ["uniformToFill", "fill", "uniform", "none"]
-AA_MODES = ["默认（不设置）", "grayscale", "cleartype", "aliased"]
-ADJUST_MODES = ["默认（不设置）", "always", "indexed", "never"]
+# 下拉框里显示中文，传给 terminal-setup.cmd 的仍是英文枚举值
+ALIGN_CHOICES = [("居中", "center"), ("顶部", "top"), ("底部", "bottom"),
+                 ("左侧", "left"), ("右侧", "right"), ("左上", "topLeft"),
+                 ("右上", "topRight"), ("左下", "bottomLeft"), ("右下", "bottomRight")]
+STRETCH_CHOICES = [("铺满并裁剪（推荐）", "uniformToFill"), ("拉伸填满（会变形）", "fill"),
+                   ("完整显示（留黑边）", "uniform"), ("原始尺寸", "none")]
+AA_CHOICES = [("默认（不设置）", ""), ("灰度柔和", "grayscale"),
+              ("清晰锐利", "cleartype"), ("像素风", "aliased")]
+ADJUST_CHOICES = [("默认（不设置）", ""), ("总是修正", "always"),
+                  ("仅索引色", "indexed"), ("不修正", "never")]
+
+
+def labels(choices):
+    return [c[0] for c in choices]
+
+
+def value_of(choices, label):
+    for txt, val in choices:
+        if txt == label:
+            return val
+    return ""
+
+
+def label_of(choices, value):
+    for txt, val in choices:
+        if val == value:
+            return txt
+    return choices[0][0] if value in ("", None) else value
 
 
 # --------------------------------------------------------------------- 外部环境
@@ -143,9 +166,9 @@ def build_apply_args(st):
 
     if st["cell_height"]:
         args += ["-cell-height", st["cell_height"]]
-    if st["aa"] != AA_MODES[0]:
+    if st["aa"]:
         args += ["-antialiasing", st["aa"]]
-    if st["adjust"] != ADJUST_MODES[0]:
+    if st["adjust"]:
         args += ["-adjust-colors", st["adjust"]]
     return args + ["/y"]
 
@@ -380,12 +403,12 @@ class App:
         tk.Label(g, text="留空 = 不设置", bg=CARD, fg=DIM, font=MONO_S).grid(
             row=0, column=2, sticky="w", padx=8)
         tk.Label(g, text="抗锯齿", bg=CARD, fg=DIM, font=UI_S).grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self.var_aa = tk.StringVar(value=AA_MODES[0])
-        ttk.Combobox(g, textvariable=self.var_aa, values=AA_MODES, width=16, state="readonly",
+        self.var_aa = tk.StringVar(value=AA_CHOICES[0][0])
+        ttk.Combobox(g, textvariable=self.var_aa, values=labels(AA_CHOICES), width=18, state="readonly",
                      font=MONO_S).grid(row=1, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=(6, 0))
-        tk.Label(g, text="不可辨色", bg=CARD, fg=DIM, font=UI_S).grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self.var_adjust = tk.StringVar(value=ADJUST_MODES[0])
-        ttk.Combobox(g, textvariable=self.var_adjust, values=ADJUST_MODES, width=16, state="readonly",
+        tk.Label(g, text="颜色修正", bg=CARD, fg=DIM, font=UI_S).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.var_adjust = tk.StringVar(value=ADJUST_CHOICES[0][0])
+        ttk.Combobox(g, textvariable=self.var_adjust, values=labels(ADJUST_CHOICES), width=18, state="readonly",
                      font=MONO_S).grid(row=2, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=(6, 0))
 
         # ================= 右列：背景图 / 当前设置 / 输出
@@ -414,12 +437,12 @@ class App:
         g2 = tk.Frame(b, bg=CARD)
         g2.pack(fill="x", pady=(6, 0))
         tk.Label(g2, text="对齐", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=0, sticky="w")
-        self.var_align = tk.StringVar(value="center")
-        ttk.Combobox(g2, textvariable=self.var_align, values=ALIGNS, width=12,
+        self.var_align = tk.StringVar(value=ALIGN_CHOICES[0][0])
+        ttk.Combobox(g2, textvariable=self.var_align, values=labels(ALIGN_CHOICES), width=10,
                      state="readonly", font=MONO_S).grid(row=0, column=1, sticky="w", padx=(10, 12))
         tk.Label(g2, text="拉伸", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=2, sticky="w")
-        self.var_stretch = tk.StringVar(value="uniformToFill")
-        ttk.Combobox(g2, textvariable=self.var_stretch, values=STRETCHES, width=12,
+        self.var_stretch = tk.StringVar(value=STRETCH_CHOICES[0][0])
+        ttk.Combobox(g2, textvariable=self.var_stretch, values=labels(STRETCH_CHOICES), width=17,
                      state="readonly", font=MONO_S).grid(row=0, column=3, sticky="w", padx=(10, 0))
 
         c, b = self._card(right, "当前设置（读自 settings.json）")
@@ -477,18 +500,16 @@ class App:
         bo = cur.get("bgOpacity")
         if isinstance(bo, (int, float)) and 0.01 <= float(bo) <= 1.0:
             self.scale_bgop.set(float(bo))
-        if cur.get("bgAlign") in ALIGNS:
-            self.var_align.set(cur["bgAlign"])
-        if cur.get("bgStretch") in STRETCHES:
-            self.var_stretch.set(cur["bgStretch"])
+        if cur.get("bgAlign"):
+            self.var_align.set(label_of(ALIGN_CHOICES, cur["bgAlign"]))
+        if cur.get("bgStretch"):
+            self.var_stretch.set(label_of(STRETCH_CHOICES, cur["bgStretch"]))
         if cur.get("cellHeight"):
             self.var_cellh.set(str(cur["cellHeight"]))
-        aa = cur.get("aa")
-        if aa in AA_MODES[1:]:
-            self.var_aa.set(aa)
-        adj = cur.get("adjust")
-        if adj in ADJUST_MODES[1:]:
-            self.var_adjust.set(adj)
+        if cur.get("aa"):
+            self.var_aa.set(label_of(AA_CHOICES, cur["aa"]))
+        if cur.get("adjust"):
+            self.var_adjust.set(label_of(ADJUST_CHOICES, cur["adjust"]))
         self._on_transp()
         self._on_bgop()
         self._on_bg_toggle()
@@ -559,14 +580,14 @@ class App:
             "bg_enabled": bool(self.var_bg_on.get()),
             "bg_path": self.var_bg.get().strip(),
             "bg_opacity": float(self.var_bg_op.get()),
-            "bg_align": self.var_align.get(),
-            "bg_stretch": self.var_stretch.get(),
+            "bg_align": value_of(ALIGN_CHOICES, self.var_align.get()),
+            "bg_stretch": value_of(STRETCH_CHOICES, self.var_stretch.get()),
             "font_mode": self.var_font_mode.get(),
             "face": self.var_face.get(),
             "font_file": self.var_font_file.get().strip(),
             "cell_height": self.var_cellh.get().strip(),
-            "aa": self.var_aa.get(),
-            "adjust": self.var_adjust.get(),
+            "aa": value_of(AA_CHOICES, self.var_aa.get()),
+            "adjust": value_of(ADJUST_CHOICES, self.var_adjust.get()),
         }
 
     def _set_busy(self, busy):
@@ -719,7 +740,7 @@ def selftest():
     base = {"style": "linux", "transparent": 64, "bg_enabled": False, "bg_path": "",
             "bg_opacity": 0.22, "bg_align": "center", "bg_stretch": "uniformToFill",
             "font_mode": "face", "face": "0xProto Mono Italic", "font_file": "",
-            "cell_height": "", "aa": AA_MODES[0], "adjust": ADJUST_MODES[0]}
+            "cell_height": "", "aa": "", "adjust": ""}
     print("默认状态 ->", build_apply_args(base))
     print("原生状态 ->", build_apply_args(dict(base, style="win", transparent=0)))
     print("全参数   ->", build_apply_args(dict(

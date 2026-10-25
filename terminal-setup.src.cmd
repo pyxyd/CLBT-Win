@@ -1486,12 +1486,13 @@ function Show-CliHelp {
     Write-Host '    CLBT -opacity <0-100>         直接设置不透明度（100=完全不透明，同 Terminal 的 opacity）' -ForegroundColor Gray
     Write-Host '    CLBT -background "<图片路径>"  设置背景图片（png/jpg/jpeg/gif/bmp，可与透明度叠加）' -ForegroundColor Gray
     Write-Host '    CLBT -background off          移除背景图片' -ForegroundColor Gray
-    Write-Host '    CLBT -bg-align <对齐>         背景图对齐: center/top/bottom/left/right/topLeft/...' -ForegroundColor Gray
-    Write-Host '    CLBT -bg-stretch <拉伸>       背景图拉伸: uniformToFill/fill/uniform/none' -ForegroundColor Gray
+    Write-Host '    CLBT -bg-align <对齐>         背景图对齐: 居中 center / 顶部 top / 底部 bottom / 左侧 left / 右侧 right' -ForegroundColor Gray
+    Write-Host '                                 另有 左上 topLeft / 右上 topRight / 左下 bottomLeft / 右下 bottomRight' -ForegroundColor DarkGray
+    Write-Host '    CLBT -bg-stretch <拉伸>       背景图拉伸: 铺满并裁剪 uniformToFill / 拉伸填满 fill / 完整显示 uniform / 原始尺寸 none' -ForegroundColor Gray
     Write-Host '    CLBT -bg-opacity <0-1>        背景图浓淡（越小越透；默认跟随窗口透明度）' -ForegroundColor Gray
     Write-Host '    CLBT -cell-height <0.8-2.0>   行高（如 1.2，越大行距越松）' -ForegroundColor Gray
-    Write-Host '    CLBT -antialiasing <模式>     抗锯齿: grayscale/cleartype/aliased' -ForegroundColor Gray
-    Write-Host '    CLBT -adjust-colors <策略>    不可辨颜色修正: always/indexed/never' -ForegroundColor Gray
+    Write-Host '    CLBT -antialiasing <模式>     抗锯齿: 灰度柔和 grayscale / 清晰锐利 cleartype / 像素风 aliased' -ForegroundColor Gray
+    Write-Host '    CLBT -adjust-colors <策略>    颜色修正: 总是修正 always / 仅索引色 indexed / 不修正 never' -ForegroundColor Gray
     Write-Host '    CLBT -encoding on|off         让 cmd 标签以 UTF-8 启动（消除 bat 中文乱码）' -ForegroundColor Gray
     Write-Host '    CLBT -font "<字体文件路径>"    安装并使用指定字体（.ttf/.otf/.ttc，或目录）' -ForegroundColor Gray
     Write-Host '    CLBT -face "<字体族名>"        直接用已安装的字族（如 0xProto Nerd Font Mono）' -ForegroundColor Gray
@@ -1908,7 +1909,9 @@ for ($i = 0; $i -lt $catalog.Count; $i++) {
         if ($noFontIdx -gt 0 -and $n -eq $noFontIdx) { $tail = '   <- 推荐（Windows 原生，用系统字体）' }
         else { $tail = '   <- 推荐（斜体终端）' }
     }
-    $line = '  {0}) {1,-26} {2}{3}' -f $n, $catalog[$i].Family, $catalog[$i].Styles, $tail
+    $styleCn = $catalog[$i].Styles -replace 'Bold Italic', '粗斜体' -replace 'Bold', '粗体' `
+        -replace 'Italic', '斜体' -replace 'Regular', '常规'
+    $line = '  {0}) {1,-26} {2}{3}' -f $n, $catalog[$i].Family, $styleCn, $tail
     if ($n -eq $defaultIdx) { Write-Host $line -ForegroundColor Green }
     else { Write-Host $line -ForegroundColor Gray }
 }
@@ -1957,7 +1960,9 @@ else {
 }
 Write-Host ''
 if ($face) {
-    Write-Host ("  已选择字体: {0}  ({1})" -f $face, $faceDesc) -ForegroundColor Cyan
+    $faceDescCn = $faceDesc -replace 'Bold Italic', '粗斜体' -replace 'Bold', '粗体' `
+        -replace 'Italic', '斜体' -replace 'Regular', '常规'
+    Write-Host ("  已选择字体: {0}  ({1})" -f $face, $faceDescCn) -ForegroundColor Cyan
 }
 else {
     Write-Host '  已选择字体: 系统默认' -ForegroundColor Cyan
@@ -2003,31 +2008,56 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
     $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
     $v = $v.Trim(); if ($v) { $env:WT_CELLHEIGHT = $v }
 
-    Write-Host '  抗锯齿 1) grayscale(柔和)  2) cleartype(锐利)  3) aliased(像素风)  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    Write-Host '  抗锯齿 1) 灰度柔和  2) 清晰锐利  3) 像素风   (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
     $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
-    switch ($v.Trim()) { '1' { $env:WT_AA = 'grayscale' } '2' { $env:WT_AA = 'cleartype' } '3' { $env:WT_AA = 'aliased' } }
+    switch ($v.Trim()) {
+        '1' { $env:WT_AA = 'grayscale' } '2' { $env:WT_AA = 'cleartype' } '3' { $env:WT_AA = 'aliased' }
+        '灰度柔和' { $env:WT_AA = 'grayscale' } '清晰锐利' { $env:WT_AA = 'cleartype' } '像素风' { $env:WT_AA = 'aliased' }
+    }
 
-    Write-Host '  自动修正不可辨认颜色？(y/N，回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    Write-Host '  自动修正不可辨认颜色（让看不清的颜色自动变亮/变深）？(y/N，回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
     $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
     if ($v.Trim().ToLower() -in @('y', 'yes', '是')) { $env:WT_ADJUST = 'always' }
     elseif ($v.Trim().ToLower() -in @('n', 'no', '否')) { $env:WT_ADJUST = 'never' }
 
-    Write-Host '  背景图对齐 1) center 2) top 3) bottom 4) left 5) right  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    Write-Host '  背景图对齐 1) 居中 2) 顶部 3) 底部 4) 左侧 5) 右侧 6) 左上 7) 右上 8) 左下 9) 右下  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
     $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
-    switch ($v.Trim()) { '1' { $env:WT_BGALIGN = 'center' } '2' { $env:WT_BGALIGN = 'top' } '3' { $env:WT_BGALIGN = 'bottom' } '4' { $env:WT_BGALIGN = 'left' } '5' { $env:WT_BGALIGN = 'right' } }
+    switch ($v.Trim()) {
+        '1' { $env:WT_BGALIGN = 'center' } '2' { $env:WT_BGALIGN = 'top' } '3' { $env:WT_BGALIGN = 'bottom' }
+        '4' { $env:WT_BGALIGN = 'left' } '5' { $env:WT_BGALIGN = 'right' } '6' { $env:WT_BGALIGN = 'topLeft' }
+        '7' { $env:WT_BGALIGN = 'topRight' } '8' { $env:WT_BGALIGN = 'bottomLeft' } '9' { $env:WT_BGALIGN = 'bottomRight' }
+        '居中' { $env:WT_BGALIGN = 'center' } '顶部' { $env:WT_BGALIGN = 'top' } '底部' { $env:WT_BGALIGN = 'bottom' }
+        '左侧' { $env:WT_BGALIGN = 'left' } '右侧' { $env:WT_BGALIGN = 'right' } '左上' { $env:WT_BGALIGN = 'topLeft' }
+        '右上' { $env:WT_BGALIGN = 'topRight' } '左下' { $env:WT_BGALIGN = 'bottomLeft' } '右下' { $env:WT_BGALIGN = 'bottomRight' }
+    }
 
     Write-Host '  背景图浓淡 (0.15-0.75，越小越透；回车 = 跟随窗口透明度): ' -NoNewline -ForegroundColor DarkCyan
     $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
     $v = $v.Trim(); if ($v) { $env:WT_BGOPACITY = $v }
 
-    Write-Host '  背景图拉伸 1) uniformToFill(铺满不拉伸) 2) fill 3) uniform 4) none  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    Write-Host '  背景图拉伸 1) 铺满并裁剪（推荐） 2) 拉伸填满（会变形） 3) 完整显示（留黑边） 4) 原始尺寸  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
     $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
-    switch ($v.Trim()) { '1' { $env:WT_BGSTRETCH = 'uniformToFill' } '2' { $env:WT_BGSTRETCH = 'fill' } '3' { $env:WT_BGSTRETCH = 'uniform' } '4' { $env:WT_BGSTRETCH = 'none' } }
+    switch ($v.Trim()) {
+        '1' { $env:WT_BGSTRETCH = 'uniformToFill' } '2' { $env:WT_BGSTRETCH = 'fill' }
+        '3' { $env:WT_BGSTRETCH = 'uniform' } '4' { $env:WT_BGSTRETCH = 'none' }
+        '铺满并裁剪' { $env:WT_BGSTRETCH = 'uniformToFill' } '拉伸填满' { $env:WT_BGSTRETCH = 'fill' }
+        '完整显示' { $env:WT_BGSTRETCH = 'uniform' } '原始尺寸' { $env:WT_BGSTRETCH = 'none' }
+    }
 
+    $aaText = @{ grayscale = '灰度柔和'; cleartype = '清晰锐利'; aliased = '像素风' }
+    $adjText = @{ always = '总是修正'; indexed = '仅索引色'; never = '不修正' }
+    $alignText = @{ center = '居中'; top = '顶部'; bottom = '底部'; left = '左侧'; right = '右侧'
+                    topLeft = '左上'; topRight = '右上'; bottomLeft = '左下'; bottomRight = '右下' }
+    $stretchText = @{ uniformToFill = '铺满并裁剪'; fill = '拉伸填满'; uniform = '完整显示'; none = '原始尺寸' }
     Write-Host ''
     Write-Host ("  高级外观: 行高=" + $(if ($env:WT_CELLHEIGHT) { $env:WT_CELLHEIGHT } else { '保持' }) +
-                "  抗锯齿=" + $(if ($env:WT_AA) { $env:WT_AA } else { '保持' }) +
-                "  颜色修正=" + $(if ($env:WT_ADJUST) { $env:WT_ADJUST } else { '保持' })) -ForegroundColor Cyan
+                "  抗锯齿=" + $(if ($env:WT_AA) { $aaText[$env:WT_AA] } else { '保持' }) +
+                "  颜色修正=" + $(if ($env:WT_ADJUST) { $adjText[$env:WT_ADJUST] } else { '保持' })) -ForegroundColor Cyan
+    if ($env:WT_BGALIGN -or $env:WT_BGOPACITY -or $env:WT_BGSTRETCH) {
+        Write-Host ("  背景图  : 对齐=" + $(if ($env:WT_BGALIGN) { $alignText[$env:WT_BGALIGN] } else { '保持' }) +
+                    "  浓淡=" + $(if ($env:WT_BGOPACITY) { $env:WT_BGOPACITY } else { '保持' }) +
+                    "  拉伸=" + $(if ($env:WT_BGSTRETCH) { $stretchText[$env:WT_BGSTRETCH] } else { '保持' })) -ForegroundColor Cyan
+    }
     Write-Host ''
 }
 
