@@ -1,15 +1,20 @@
-﻿# 统一换行：批处理与 PowerShell 必须 CRLF，否则 cmd 会误解析内嵌脚本
-* text=auto
+# 行尾策略：仓库里统一存 LF，检出时把批处理 / PowerShell 还原成 CRLF
+# （cmd 解析批处理必须是 CRLF，否则会把内嵌的 PowerShell 正文当命令执行）
+* text=auto eol=lf
 *.cmd text eol=crlf
 *.bat text eol=crlf
 *.ps1 text eol=crlf
 *.txt text eol=crlf
 
-# 二进制
+# 二进制：不做任何换行转换
 *.ttf binary
 *.otf binary
+*.ttc binary
 *.ico binary
 *.png binary
 *.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
 *.exe binary
 *.zip binary
