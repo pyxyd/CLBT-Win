@@ -8,10 +8,12 @@
 - **背景图 + 透明度**：图片按"水印"强度自动跟随窗口透明度，互不打架
 - **自适应前景色**：窗口透明时，按周围背景明暗自动切换深/浅色文字
 - **自动解决 bat 乱码**：安装时把 Terminal 里的 cmd 标签改成 UTF-8 启动
+- **图形界面（可选）**：`clbt_gui.py`，tkinter 零依赖，勾选式改外观，和命令行完全等价
 
 ![工具界面](screenshots/tool-ui.png)
 
 ![cmd 提示符](screenshots/cmd-prompt.png)
+
 
 ## 快速开始
 
@@ -88,6 +90,25 @@ CLBT -help                             显示帮助
 
 选 1 后依次询问：风格 → 透明度 → 字体（含"自定义字体文件"）→ cmd 提示符 → 背景图 → 高级外观（行高/抗锯齿/颜色修正/背景对齐/背景浓淡）→ 自适应。每步直接回车都用推荐默认值。
 
+## 图形界面（可选）
+
+不想敲参数就开图形界面：
+
+```bat
+python clbt_gui.py
+```
+
+![图形界面](screenshots/gui.png)
+
+- 只用 Python 自带的 tkinter，不装任何第三方库；Windows 官方 Python 自带 tkinter
+- 打开时**读当前 settings.json 预填界面**，不会一上来就把既有设置覆盖成默认
+- 勾什么就调什么，背后仍然是同一个 `terminal-setup.cmd`，所以界面和命令行结果完全一致，
+  日志区会原样打印实际执行的命令和输出
+- 能做的事：风格（仿 Linux / 原生）、透明度、背景图（浓淡 / 对齐 / 拉伸）、字体（内置字族
+  `-face` 或字体文件 `-font`）、行高、抗锯齿、不可辨色、UTF-8 编码、自适应前景色，
+  以及「恢复 Windows 原生 / 撤回外观修改 / 移除 cmd 提示符 / 卸载命令行入口」
+- `python clbt_gui.py --selftest` 只打印将要执行的命令，不开窗口
+
 ## 它会修改什么（透明披露）
 
 | 位置 | 内容 | 可撤销 |
@@ -139,6 +160,7 @@ v1.0.2 已修复。旧版本文档区里有中文注释，在 `chcp 65001` 的�
 ├─ terminal-setup.src.cmd      模板：批处理头 + PowerShell 正文（不含字体数据）
 ├─ adaptive-watch.ps1          自适应前景色守护（base64 内嵌进成品）
 ├─ install.py                  安装器源码
+├─ clbt_gui.py                 图形界面（tkinter，可选）
 ├─ build_package.py            打包：模板 + 字体 -> terminal-setup.cmd
 ├─ make_dist.py                生成 dist\CLBT.zip
 ├─ make_icon.py                生成图标（多尺寸 ICO）

@@ -60,6 +60,10 @@ if /i "%~1"=="-win" goto :arg_win
 if /i "%~1"=="-transparent" goto :arg_trans
 if /i "%~1"=="-font" goto :arg_font
 if /i "%~1"=="--font" goto :arg_font
+if /i "%~1"=="-face" goto :arg_face
+if /i "%~1"=="--face" goto :arg_face
+if /i "%~1"=="-install-fonts" goto :arg_ifonts
+if /i "%~1"=="--install-fonts" goto :arg_ifonts
 if /i "%~1"=="-opacity" goto :arg_opacity
 if /i "%~1"=="--opacity" goto :arg_opacity
 if /i "%~1"=="-encoding" goto :arg_encoding
@@ -115,6 +119,17 @@ set "WT_FONTFILE=%~2"
 shift
 shift
 goto :parse
+
+:arg_face
+set "WT_MODE=cli"
+set "WT_FACE=%~2"
+shift
+shift
+goto :parse
+
+:arg_ifonts
+set "WT_MODE=installfonts"
+goto :launch
 
 :arg_trans
 set "WT_MODE=cli"
@@ -1470,6 +1485,8 @@ function Show-CliHelp {
     Write-Host '    CLBT -adjust-colors <策略>    不可辨颜色修正: always/indexed/never' -ForegroundColor Gray
     Write-Host '    CLBT -encoding on|off         让 cmd 标签以 UTF-8 启动（消除 bat 中文乱码）' -ForegroundColor Gray
     Write-Host '    CLBT -font "<字体文件路径>"    安装并使用指定字体（.ttf/.otf/.ttc，或目录）' -ForegroundColor Gray
+    Write-Host '    CLBT -face "<字体族名>"        直接用已安装的字族（如 0xProto Nerd Font Mono）' -ForegroundColor Gray
+    Write-Host '    CLBT -install-fonts          只安装内置的 10 个字体，不改任何设置' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive                开启自适应前景色（透明时按背景明暗切字体深浅）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive off            关闭自适应前景色' -ForegroundColor Gray
     Write-Host '    CLBT -uninstall               撤回对命令行的修改（外观/提示符/cmd 挂钩还原）' -ForegroundColor Gray
@@ -1557,6 +1574,32 @@ if ($env:WT_MODE -eq 'uninstall') {
     }
 }
 
+if ($env:WT_MODE -eq 'installfonts') {
+    # 只安装内嵌的 10 个字体，不改任何外观设置（GUI / 脚本预置字体用）
+    try {
+        $stage = Join-Path $env:TEMP ('wt_fonts_' + [guid]::NewGuid().ToString('N'))
+        $files = Expand-EmbeddedFonts $stage
+        if ($files.Count -eq 0) {
+            Write-Host '  内嵌字体解码失败（文件可能损坏）' -ForegroundColor Red
+            exit 4
+        }
+        $fams = New-Object System.Collections.ArrayList
+        foreach ($f in $files) {
+            $fam = Get-FamilyOf $f.FullName $f.BaseName
+            if (-not $fams.Contains($fam)) { [void]$fams.Add($fam) }
+        }
+        Install-FontFile $stage | Out-Null
+        Write-Host ('  内置字体已就绪：' + $files.Count + ' 个文件 / ' + $fams.Count + ' 个字族') -ForegroundColor Green
+        foreach ($x in $fams) { Write-Host ('    ' + $x) -ForegroundColor Gray }
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        exit 0
+    }
+    catch {
+        Write-Host ('字体安装失败: ' + $_.Exception.Message) -ForegroundColor Red
+        exit 3
+    }
+}
+
 if ($env:WT_MODE -eq 'cli') {
     $style = ''
     if ($env:WT_STYLE) { $style = $env:WT_STYLE.Trim().ToLower() }
@@ -1608,6 +1651,10 @@ if ($env:WT_MODE -eq 'cli') {
             Write-Host ("字体处理失败: " + $_.Exception.Message) -ForegroundColor Red
             exit 3
         }
+    }
+    elseif ($env:WT_FACE) {
+        $cliFace = [string]$env:WT_FACE
+        Write-Host ("  使用字族: " + $cliFace) -ForegroundColor Cyan
     }
     elseif ($style -eq 'linux') { $cliFace = '0xProto Mono Italic' }
 
