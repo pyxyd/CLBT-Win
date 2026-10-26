@@ -120,6 +120,9 @@ def load():
     if not os.path.isfile(VERSION_JSON):
         raise SystemExit(f"缺少版本源文件: {VERSION_JSON}")
     j = json.loads(_read(VERSION_JSON))
+    for k in ("major", "middle", "minor"):
+        if k not in j:
+            raise ValueError(f"version.json 缺少字段 {k!r}")
     return Version(j["major"], j["middle"], j["minor"])
 
 
@@ -152,16 +155,44 @@ def sync_files(v, verbose=True):
 
 
 def check(v):
-    """各文件是否与 version.json 一致；返回问题列表"""
+    """各文件是否与 version.json 一致；返回问题列表（精确比对，不靠子串）"""
     problems = []
-    for path, want in ((INFO_MAIN, f"filevers=({v.major}, {v.middle}, {v.minor}, 0)"),
-                       (INFO_MAIN, f"StringStruct('FileVersion', '{v}.0')"),
-                       (INFO_GUI, f"filevers=({v.major}, {v.middle}, {v.minor}, 0)"),
-                       (INFO_GUI, f"StringStruct('FileVersion', '{v}.0')")):
-        if want not in _read(path):
-            problems.append(f"{os.path.basename(path)} 缺少 {want}")
-    if f'VERSION = "{v}"' not in _read(GUI_PY):
-        problems.append(f"clbt_gui.py 的 VERSION 不是 {v}")
+    want4 = (v.major, v.middle, v.minor, 0)
+    want_s = f"{v}.0"
+    pat_fixed = re.compile(
+        r"filevers=\((\d+), (\d+), (\d+), (\d+)\), prodvers=\((\d+), (\d+), (\d+), (\d+)\)")
+
+    for path in (INFO_MAIN, INFO_GUI):
+        name = os.path.basename(path)
+        try:
+            txt = _read(path)
+        except FileNotFoundError:
+            problems.append(f"{name} 不存在")
+            continue
+        m = pat_fixed.search(txt)
+        if not m:
+            problems.append(f"{name} 里解析不到 filevers/prodvers")
+        else:
+            got = tuple(int(x) for x in m.groups())
+            if got != want4 + want4:
+                problems.append(f"{name} 的 filevers/prodvers 是 {got[:4]}/{got[4:]}，应为 {want4}")
+        for key in ("FileVersion", "ProductVersion"):
+            m2 = re.search(rf"StringStruct\('{key}', '([^']*)'\)", txt)
+            if not m2:
+                problems.append(f"{name} 缺少 {key} 字段")
+            elif m2.group(1) != want_s:
+                problems.append(f"{name} 的 {key} 是 {m2.group(1)}，应为 {want_s}")
+
+    try:
+        src = _read(GUI_PY)
+    except FileNotFoundError:
+        problems.append("clbt_gui.py 不存在")
+        return problems
+    m3 = re.search(r'^VERSION = "([^"]*)"$', src, re.M)
+    if not m3:
+        problems.append("clbt_gui.py 里找不到 VERSION 常量")
+    elif m3.group(1) != str(v):
+        problems.append(f"clbt_gui.py 的 VERSION 是 {m3.group(1)}，应为 {v}")
     return problems
 
 
@@ -197,6 +228,20 @@ def selftest():
 
 
 def main():
+    try:
+        return _main()
+    except FileNotFoundError as e:
+        print(f"[XX] 缺少文件: {e.filename or e}")
+        return 2
+    except KeyError as e:
+        print(f"[XX] version.json 缺少字段: {e}")
+        return 2
+    except ValueError as e:
+        print(f"[XX] {e}")
+        return 2
+
+
+def _main():
     ap = argparse.ArgumentParser(
         description="CLBT 版本号管理（15 进制进位：小版本满 15 进中，中版本满 15 进大）")
     ap.add_argument("--next", action="store_true", help="计算并（配合 --write）写入下一个版本")
@@ -220,6 +265,9 @@ def main():
         print(f"[OK] 所有版本文件一致：{cur}")
         return 0
 
+    if args.set and args.next:
+        print("[XX] --set 和 --next 不能同时用")
+        return 2
     if args.set:
         target = Version.parse(args.set)
     elif args.next:
