@@ -65,6 +65,7 @@ CLBT -bg-stretch uniform               拉伸：uniformToFill/fill/uniform/none
 
 CLBT -font "D:\fonts\my.ttf"           安装并使用指定字体（文件或目录）
 CLBT -face "0xProto Nerd Font Mono"     直接用已安装的字族（不用传文件路径）
+CLBT -font-weight bold                 字重：常规 normal / 粗体 bold
 CLBT -install-fonts                    只安装内置的 10 个字体，不改任何设置
 CLBT -cell-height 1.2                  行高 0.8–2.0
 CLBT -antialiasing grayscale           抗锯齿：grayscale/cleartype/aliased
@@ -116,9 +117,10 @@ python clbt_gui.py
 - 打开时**读当前 settings.json 预填界面**，不会一上来就把既有设置覆盖成默认
 - 勾什么就调什么，背后仍然是同一个 `terminal-setup.cmd`，所以界面和命令行结果完全一致，
   日志区会原样打印实际执行的命令和输出
-- 能做的事：风格（仿 Linux / 原生）、透明度、背景图（浓淡 / 对齐 / 拉伸）、字体（内置字族
-  `-face` 或字体文件 `-font`）、行高、抗锯齿、不可辨色、UTF-8 编码、自适应前景色，
-  以及「恢复 Windows 原生 / 撤回外观修改 / 移除 cmd 提示符 / 卸载命令行入口」
+- 能做的事：风格（仿 Linux / 原生）、透明度、背景图（浓淡 / 对齐 / 拉伸）、字体（字形
+  **斜体 / 等宽 / 标准 / 比例** + 字重 **常规 / 粗体**，或直接指定字体文件）、行高、抗锯齿、
+  颜色修正、UTF-8 编码、自适应前景色，以及「恢复 Windows 原生 / 撤回外观修改 /
+  移除 cmd 提示符 / 卸载命令行入口」
 - `python clbt_gui.py --selftest` 只打印将要执行的命令，不开窗口
 - 打包 exe 时用 `--manifest gui.manifest`（per-monitor DPI 感知），125% / 150% 缩放下不发虚
 

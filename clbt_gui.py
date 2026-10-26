@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -46,12 +46,12 @@ UI_S = ("Microsoft YaHei UI", 9)
 MONO = ("Cascadia Mono", 9)
 MONO_S = ("Cascadia Mono", 8)
 
-FAMILIES = [
-    "0xProto Mono Italic",
-    "0xProto Nerd Font",
-    "0xProto Nerd Font Mono",
-    "0xProto Nerd Font Propo",
-]
+# 字体下拉显示短名，内部映射到真实字族（-face）与字重（-font-weight）
+FONT_CHOICES = [("斜体", "0xProto Mono Italic"),
+                ("等宽", "0xProto Nerd Font Mono"),
+                ("标准", "0xProto Nerd Font"),
+                ("比例", "0xProto Nerd Font Propo")]
+WEIGHT_CHOICES = [("常规", "normal"), ("粗体", "bold")]
 # 下拉框里显示中文，传给 terminal-setup.cmd 的仍是英文枚举值
 ALIGN_CHOICES = [("居中", "center"), ("顶部", "top"), ("底部", "bottom"),
                  ("左侧", "left"), ("右侧", "right"), ("左上", "topLeft"),
@@ -134,6 +134,7 @@ def read_current_settings():
             "bgAlign": d.get("backgroundImageAlignment"),
             "bgStretch": d.get("backgroundImageStretchMode"),
             "face": font.get("face"),
+            "weight": font.get("weight"),
             "size": font.get("size"),
             "scheme": d.get("colorScheme"),
             "cellHeight": font.get("cellHeight"),
@@ -155,6 +156,8 @@ def build_apply_args(st):
             args += ["-font", st["font_file"]]
         elif st["face"]:
             args += ["-face", st["face"]]
+        if st["weight"]:
+            args += ["-font-weight", st["weight"]]
 
     if not st["bg_enabled"]:
         args += ["-background", "off"]
@@ -373,15 +376,21 @@ class App:
         c, b = self._card(left, "字体（仿 Linux 风格生效）")
         c.pack(fill="x", pady=(0, 8))
         self.var_font_mode = tk.StringVar(value="face")
-        self.var_face = tk.StringVar(value=FAMILIES[0])
+        self.var_face = tk.StringVar(value=FONT_CHOICES[0][0])
+        self.var_weight = tk.StringVar(value=WEIGHT_CHOICES[0][0])
         self.var_font_file = tk.StringVar(value="")
         line = tk.Frame(b, bg=CARD)
         line.pack(fill="x")
-        self.cmb_face = ttk.Combobox(line, textvariable=self.var_face, values=FAMILIES,
-                                     width=17, state="readonly", font=MONO_S)
-        self.cmb_face.pack(side="left")
+        tk.Label(line, text="字形", bg=CARD, fg=DIM, font=UI_S).pack(side="left")
+        self.cmb_face = ttk.Combobox(line, textvariable=self.var_face, values=labels(FONT_CHOICES),
+                                     width=6, state="readonly", font=MONO_S)
+        self.cmb_face.pack(side="left", padx=(6, 10))
         self.cmb_face.bind("<<ComboboxSelected>>", lambda e: self.var_font_mode.set("face"))
-        self._btn(line, "装内置字体", self._install_fonts, padx=8).pack(side="left", padx=(8, 0))
+        tk.Label(line, text="字重", bg=CARD, fg=DIM, font=UI_S).pack(side="left")
+        self.cmb_weight = ttk.Combobox(line, textvariable=self.var_weight, values=labels(WEIGHT_CHOICES),
+                                       width=6, state="readonly", font=MONO_S)
+        self.cmb_weight.pack(side="left", padx=(6, 0))
+        self._btn(line, "装内置字体", self._install_fonts, padx=8).pack(side="right")
         line2 = tk.Frame(b, bg=CARD)
         line2.pack(fill="x", pady=(6, 0))
         self.entry_font = tk.Entry(line2, textvariable=self.var_font_file, bg=CARD2, fg=FG,
@@ -389,8 +398,8 @@ class App:
         self.entry_font.pack(side="left", fill="x", expand=True)
         self.entry_font.bind("<FocusIn>", lambda e: self.var_font_mode.set("file"))
         self._btn(line2, "浏览", self._pick_font, padx=8).pack(side="left", padx=(8, 0))
-        tk.Label(b, text="字族走 -face，文件走 -font", bg=CARD, fg=DIM, font=MONO_S,
-                 anchor="w").pack(fill="x", pady=(4, 0))
+        tk.Label(b, text="字形走 -face，字重走 -font-weight，自定义文件走 -font", bg=CARD, fg=DIM,
+                 font=MONO_S, anchor="w").pack(fill="x", pady=(4, 0))
 
         c, b = self._card(left, "细节")
         c.pack(fill="x")
@@ -491,8 +500,10 @@ class App:
         if isinstance(op, int) and 0 <= op <= 100:
             self.scale_transp.set(100 - op)
         face = cur.get("face")
-        if face in FAMILIES:
-            self.var_face.set(face)
+        if face:
+            self.var_face.set(label_of(FONT_CHOICES, face))
+        if (cur.get("weight") or "").lower() == "bold":
+            self.var_weight.set(WEIGHT_CHOICES[1][0])
         bg = cur.get("bg")
         if bg and os.path.isfile(bg):
             self.var_bg.set(bg)
@@ -583,7 +594,8 @@ class App:
             "bg_align": value_of(ALIGN_CHOICES, self.var_align.get()),
             "bg_stretch": value_of(STRETCH_CHOICES, self.var_stretch.get()),
             "font_mode": self.var_font_mode.get(),
-            "face": self.var_face.get(),
+            "face": value_of(FONT_CHOICES, self.var_face.get()),
+            "weight": value_of(WEIGHT_CHOICES, self.var_weight.get()),
             "font_file": self.var_font_file.get().strip(),
             "cell_height": self.var_cellh.get().strip(),
             "aa": value_of(AA_CHOICES, self.var_aa.get()),
@@ -739,7 +751,7 @@ def selftest():
     print(f"settings  = {cur.get('path') if cur else '未找到'}")
     base = {"style": "linux", "transparent": 64, "bg_enabled": False, "bg_path": "",
             "bg_opacity": 0.22, "bg_align": "center", "bg_stretch": "uniformToFill",
-            "font_mode": "face", "face": "0xProto Mono Italic", "font_file": "",
+            "font_mode": "face", "face": "0xProto Mono Italic", "weight": "normal", "font_file": "",
             "cell_height": "", "aa": "", "adjust": ""}
     print("默认状态 ->", build_apply_args(base))
     print("原生状态 ->", build_apply_args(dict(base, style="win", transparent=0)))

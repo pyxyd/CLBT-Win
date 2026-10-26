@@ -33,6 +33,7 @@ set "WT_SELF=%~f0"
 set "WT_SELF_DIR=%~dp0"
 set "WT_MODE="
 set "WT_FACE="
+set "WT_FONTWEIGHT="
 set "WT_NOPAUSE="
 set "WT_STYLE="
 set "WT_TRANSPARENT="
@@ -61,6 +62,8 @@ if /i "%~1"=="-transparent" goto :arg_trans
 if /i "%~1"=="-font" goto :arg_font
 if /i "%~1"=="--font" goto :arg_font
 if /i "%~1"=="-face" goto :arg_face
+if /i "%~1"=="-font-weight" goto :arg_fontweight
+if /i "%~1"=="--font-weight" goto :arg_fontweight
 if /i "%~1"=="--face" goto :arg_face
 if /i "%~1"=="-install-fonts" goto :arg_ifonts
 if /i "%~1"=="-gui" goto :arg_gui
@@ -124,6 +127,13 @@ goto :parse
 :arg_face
 set "WT_MODE=cli"
 set "WT_FACE=%~2"
+shift
+shift
+goto :parse
+
+:arg_fontweight
+set "WT_MODE=cli"
+set "WT_FONTWEIGHT=%~2"
 shift
 shift
 goto :parse
@@ -417,7 +427,8 @@ function Install-FontFile([string]$Path) {
 # =====================================================================
 function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity = -1, [string]$Background = '',
     [string]$AdjustColors = '', [string]$CellHeight = '', [string]$Antialiasing = '',
-    [string]$BgAlign = '', [string]$BgStretch = '', [string]$BgOpacity = '') {
+    [string]$BgAlign = '', [string]$BgStretch = '', [string]$BgOpacity = '',
+    [string]$FontWeight = '') {
     # Opacity < 0 表示按风格取默认值（linux 36% / win 100%）
     if ($Opacity -lt 0) { $Opacity = if ($Style -eq 'win') { 100 } else { 36 } }
 
@@ -640,11 +651,28 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
             Set-Prop $d.font 'face' $Face
             Set-Prop $d.font 'size' 12
         }
+        if ($FontWeight) {
+            if (-not ($d.PSObject.Properties.Name -contains 'font') -or $null -eq $d.font) {
+                Set-Prop $d 'font' ([pscustomobject]@{})
+            }
+            $fw = $FontWeight.Trim().ToLower()
+            if ($fw -in @('bold', '粗体')) { Set-Prop $d.font 'weight' 'bold' }
+            elseif ($fw -in @('normal', 'regular', '常规', '普通')) {
+                # 回到常规：直接删掉 weight，交给 Terminal 用默认字重
+                if ($d.font.PSObject.Properties.Name -contains 'weight') {
+                    $d.font.PSObject.Properties.Remove('weight')
+                }
+            }
+            else { throw "font-weight 只能是 normal / bold（常规 / 粗体）" }
+        }
 
         $json = $j | ConvertTo-Json -Depth 32
         [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
         Good "外观已写入（黑色亚克力 36%、方块光标、Tango 配色）"
         if ($Face) { Good "字体: $Face" }
+        if ($FontWeight) {
+            Good ("字重: " + $(if ($fw -eq 'bold') { '粗体' } else { '常规' }))
+        }
     }
     else {
         Warn '找不到 Windows Terminal 的 settings.json，跳过外观配置'
@@ -1496,6 +1524,7 @@ function Show-CliHelp {
     Write-Host '    CLBT -encoding on|off         让 cmd 标签以 UTF-8 启动（消除 bat 中文乱码）' -ForegroundColor Gray
     Write-Host '    CLBT -font "<字体文件路径>"    安装并使用指定字体（.ttf/.otf/.ttc，或目录）' -ForegroundColor Gray
     Write-Host '    CLBT -face "<字体族名>"        直接用已安装的字族（如 0xProto Nerd Font Mono）' -ForegroundColor Gray
+    Write-Host '    CLBT -font-weight <字重>      字重: 常规 normal / 粗体 bold' -ForegroundColor Gray
     Write-Host '    CLBT -install-fonts          只安装内置的 10 个字体，不改任何设置' -ForegroundColor Gray
     Write-Host '    CLBT -gui                    打开图形界面（等同于双击 CLBT-GUI.exe）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive                开启自适应前景色（透明时按背景明暗切字体深浅）' -ForegroundColor Gray
@@ -1673,7 +1702,7 @@ if ($env:WT_MODE -eq 'cli') {
         Invoke-Beautify -Face $cliFace -Style $style -Opacity $op -Background ([string]$env:WT_BACKGROUND) `
         -AdjustColors ([string]$env:WT_ADJUST) -CellHeight ([string]$env:WT_CELLHEIGHT) `
         -Antialiasing ([string]$env:WT_AA) -BgAlign ([string]$env:WT_BGALIGN) -BgStretch ([string]$env:WT_BGSTRETCH) `
-        -BgOpacity ([string]$env:WT_BGOPACITY) ` `
+        -BgOpacity ([string]$env:WT_BGOPACITY) -FontWeight ([string]$env:WT_FONTWEIGHT)
         Write-Host ''
         if ($style -eq 'win') {
             Write-Host ('  完成：Windows 原生风格' + $styleNote + '（' + $opText + '、默认配色、默认提示符）') -ForegroundColor Green
@@ -1717,7 +1746,7 @@ if ($env:WT_MODE -eq 'apply') {
         Invoke-Beautify -Face ([string]$env:WT_FACE) -Style $apStyle -Opacity $apOpacity -Background ([string]$env:WT_BACKGROUND) `
             -AdjustColors ([string]$env:WT_ADJUST) -CellHeight ([string]$env:WT_CELLHEIGHT) `
             -Antialiasing ([string]$env:WT_AA) -BgAlign ([string]$env:WT_BGALIGN) -BgStretch ([string]$env:WT_BGSTRETCH) `
-            -BgOpacity ([string]$env:WT_BGOPACITY)
+            -BgOpacity ([string]$env:WT_BGOPACITY) -FontWeight ([string]$env:WT_FONTWEIGHT)
         if ($env:WT_STATUS_FILE) {
             [System.IO.File]::WriteAllText($env:WT_STATUS_FILE, 'OK', (New-Object System.Text.UTF8Encoding($false)))
         }
@@ -1911,7 +1940,10 @@ for ($i = 0; $i -lt $catalog.Count; $i++) {
     }
     $styleCn = $catalog[$i].Styles -replace 'Bold Italic', '粗斜体' -replace 'Bold', '粗体' `
         -replace 'Italic', '斜体' -replace 'Regular', '常规'
-    $line = '  {0}) {1,-26} {2}{3}' -f $n, $catalog[$i].Family, $styleCn, $tail
+    $shortName = @{ '0xProto Mono Italic' = '斜体'; '0xProto Nerd Font Mono' = '等宽'
+                    '0xProto Nerd Font' = '标准'; '0xProto Nerd Font Propo' = '比例' }
+    $showName = if ($shortName.ContainsKey($catalog[$i].Family)) { $shortName[$catalog[$i].Family] } else { $catalog[$i].Family }
+    $line = '  {0}) {1,-8} {2}{3}' -f $n, $showName, $styleCn, $tail
     if ($n -eq $defaultIdx) { Write-Host $line -ForegroundColor Green }
     else { Write-Host $line -ForegroundColor Gray }
 }
@@ -1962,7 +1994,10 @@ Write-Host ''
 if ($face) {
     $faceDescCn = $faceDesc -replace 'Bold Italic', '粗斜体' -replace 'Bold', '粗体' `
         -replace 'Italic', '斜体' -replace 'Regular', '常规'
-    Write-Host ("  已选择字体: {0}  ({1})" -f $face, $faceDescCn) -ForegroundColor Cyan
+    $faceShort = @{ '0xProto Mono Italic' = '斜体'; '0xProto Nerd Font Mono' = '等宽'
+                    '0xProto Nerd Font' = '标准'; '0xProto Nerd Font Propo' = '比例' }
+    $faceShow = if ($faceShort.ContainsKey($face)) { $faceShort[$face] + '（' + $face + '）' } else { $face }
+    Write-Host ("  已选择字体: {0}  ({1})" -f $faceShow, $faceDescCn) -ForegroundColor Cyan
 }
 else {
     Write-Host '  已选择字体: 系统默认' -ForegroundColor Cyan
@@ -2015,6 +2050,13 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
         '灰度柔和' { $env:WT_AA = 'grayscale' } '清晰锐利' { $env:WT_AA = 'cleartype' } '像素风' { $env:WT_AA = 'aliased' }
     }
 
+    Write-Host '  字重 1) 常规 2) 粗体   (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    switch ($v.Trim()) {
+        '1' { $env:WT_FONTWEIGHT = 'normal' } '2' { $env:WT_FONTWEIGHT = 'bold' }
+        '常规' { $env:WT_FONTWEIGHT = 'normal' } '粗体' { $env:WT_FONTWEIGHT = 'bold' }
+    }
+
     Write-Host '  自动修正不可辨认颜色（让看不清的颜色自动变亮/变深）？(y/N，回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
     $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
     if ($v.Trim().ToLower() -in @('y', 'yes', '是')) { $env:WT_ADJUST = 'always' }
@@ -2052,7 +2094,8 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
     Write-Host ''
     Write-Host ("  高级外观: 行高=" + $(if ($env:WT_CELLHEIGHT) { $env:WT_CELLHEIGHT } else { '保持' }) +
                 "  抗锯齿=" + $(if ($env:WT_AA) { $aaText[$env:WT_AA] } else { '保持' }) +
-                "  颜色修正=" + $(if ($env:WT_ADJUST) { $adjText[$env:WT_ADJUST] } else { '保持' })) -ForegroundColor Cyan
+                "  颜色修正=" + $(if ($env:WT_ADJUST) { $adjText[$env:WT_ADJUST] } else { '保持' }) +
+                "  字重=" + $(if ($env:WT_FONTWEIGHT) { if ($env:WT_FONTWEIGHT -eq 'bold') { '粗体' } else { '常规' } } else { '保持' })) -ForegroundColor Cyan
     if ($env:WT_BGALIGN -or $env:WT_BGOPACITY -or $env:WT_BGSTRETCH) {
         Write-Host ("  背景图  : 对齐=" + $(if ($env:WT_BGALIGN) { $alignText[$env:WT_BGALIGN] } else { '保持' }) +
                     "  浓淡=" + $(if ($env:WT_BGOPACITY) { $env:WT_BGOPACITY } else { '保持' }) +
