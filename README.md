@@ -77,6 +77,7 @@ CLBT -adaptive off                     关闭
 CLBT -encoding on|off                  让 cmd 标签以 UTF-8 启动（消除 bat 乱码）
 
 CLBT -gui                              打开图形界面（等价双击 CLBT-GUI.exe）
+CLBT -diagnose                         环境诊断：设置写到了哪、当前窗口由谁渲染
 CLBT -uninstall                        撤回对命令行的全部修改
 CLBT -help                             显示帮助
 ```
@@ -157,6 +158,12 @@ v1.0.2 已修复。旧版本文档区里有中文注释，在 `chcp 65001` 的�
 
 **设置了背景图但 PowerShell 标签看不到？**
 多半是单个配置文件里写了 `backgroundImage: null` 覆盖了全局默认。工具现在会自动清除这类覆盖。
+
+**调了透明度却看不出变化？先跑 `CLBT -diagnose`**
+它会把这几件事打出来：设置文件的实际路径与当前 `opacity` / `useAcrylic`、你当前这个窗口的
+进程链（是不是 `WindowsTerminal.exe`）、已装的 Terminal 版本、系统「透明效果」开关。
+最常见的原因是**在 VS Code 的集成终端里看效果**——那里不读 Windows Terminal 的
+`settings.json`，改什么都白改。
 
 **调了透明度却看不出变化？**
 两种可能：①**亚克力磨砂**开着——它给窗口加了一层磨砂材质，透明度只影响磨砂层的浓淡，

@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.0.10
+
+### 新增环境诊断
+- `CLBT -diagnose`（别名 `-doctor`）：一次说清「设置到底生效在哪」
+  - 列出所有 settings.json 候选路径、是否存在、当前 `opacity` / `useAcrylic` / 背景图、最后修改时间
+  - 打印当前窗口的进程链（`powershell → cmd → WindowsTerminal` 这种），判断当前窗口是不是真的 Windows Terminal
+  - 打印已安装的 Terminal 版本、系统「透明效果」开关
+  - 给出结论：如果宿主是 `Code.exe`（VS Code 集成终端）或传统 conhost，会直接提示「这里不读 Windows Terminal 的设置」
+- 图形界面：底部新增「环境诊断」按钮，结果打到日志区
+- 图形界面：透明度滑杆下面加了一句提醒——改的是 Windows Terminal 窗口，不是这个界面；
+  点「应用外观」后要新开标签页才看得到
+
 ## v1.0.9
 
 ### 透明度调不动？加了亚克力开关

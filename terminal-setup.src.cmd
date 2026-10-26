@@ -70,6 +70,8 @@ if /i "%~1"=="--font-weight" goto :arg_fontweight
 if /i "%~1"=="--face" goto :arg_face
 if /i "%~1"=="-install-fonts" goto :arg_ifonts
 if /i "%~1"=="-gui" goto :arg_gui
+if /i "%~1"=="-diagnose" goto :arg_diag
+if /i "%~1"=="-doctor" goto :arg_diag
 if /i "%~1"=="--install-fonts" goto :arg_ifonts
 if /i "%~1"=="-opacity" goto :arg_opacity
 if /i "%~1"=="--opacity" goto :arg_opacity
@@ -150,6 +152,10 @@ goto :parse
 
 :arg_ifonts
 set "WT_MODE=installfonts"
+goto :launch
+
+:arg_diag
+set "WT_MODE=diag"
 goto :launch
 
 :arg_gui
@@ -1552,6 +1558,7 @@ function Show-CliHelp {
     Write-Host '    CLBT -acrylic on|off          亚克力磨砂: 开（默认，磨砂玻璃）/ 关（真透明，看得到桌面）' -ForegroundColor Gray
     Write-Host '    CLBT -install-fonts          只安装内置的 10 个字体，不改任何设置' -ForegroundColor Gray
     Write-Host '    CLBT -gui                    打开图形界面（等同于双击 CLBT-GUI.exe）' -ForegroundColor Gray
+    Write-Host '    CLBT -diagnose               环境诊断：设置写到了哪、当前窗口是谁在渲染' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive                开启自适应前景色（透明时按背景明暗切字体深浅）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive off            关闭自适应前景色' -ForegroundColor Gray
     Write-Host '    CLBT -uninstall               撤回对命令行的修改（外观/提示符/cmd 挂钩还原）' -ForegroundColor Gray
@@ -1637,6 +1644,105 @@ if ($env:WT_MODE -eq 'uninstall') {
         Write-Host ("撤回失败: " + $_.Exception.Message) -ForegroundColor Red
         exit 1
     }
+}
+
+
+if ($env:WT_MODE -eq 'diag') {
+    Write-Host ''
+    Write-Host '  || CLBT 环境诊断 ||' -ForegroundColor Cyan
+    Write-Host ''
+
+    # ---- 1) settings.json 候选
+    $la = $env:LOCALAPPDATA
+    $cands = @(
+        (Join-Path $la 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json'),
+        (Join-Path $la 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json'),
+        (Join-Path $la 'Microsoft\Windows Terminal\settings.json'),
+        (Join-Path $la 'Microsoft\Windows Terminal Preview\settings.json')
+    )
+    Write-Host '  [设置文件]' -ForegroundColor White
+    $active = $null
+    foreach ($c in $cands) {
+        if (Test-Path -LiteralPath $c) {
+            $op = '?'; $ac = '?'; $bg = '?'
+            try {
+                $raw = [System.IO.File]::ReadAllText($c, [System.Text.UTF8Encoding]::new($false))
+                $j = (Strip-JsonComments $raw) | ConvertFrom-Json
+                $d = $j.profiles.defaults
+                $op = $d.opacity
+                $ac = $d.useAcrylic
+                $bg = if ($d.backgroundImage) { Split-Path -Leaf $d.backgroundImage } else { '（无）' }
+            } catch { }
+            $t = (Get-Item -LiteralPath $c).LastWriteTime.ToString('MM-dd HH:mm:ss')
+            Write-Host ('    ' + $c) -ForegroundColor Gray
+            Write-Host ('      opacity=' + $op + '  useAcrylic=' + $ac + '  背景图=' + $bg + '  改于 ' + $t) -ForegroundColor Gray
+            if (-not $active) { $active = $c }
+        }
+        else {
+            Write-Host ('    ' + $c + '   [不存在]') -ForegroundColor DarkGray
+        }
+    }
+    Write-Host ''
+
+    # ---- 2) 当前进程链（谁在渲染这个窗口）
+    Write-Host '  [当前窗口的进程链]' -ForegroundColor White
+    $chain = @()
+    $pidCur = $PID
+    for ($i = 0; $i -lt 8; $i++) {
+        $pr = Get-Process -Id $pidCur -ErrorAction SilentlyContinue
+        if (-not $pr) { break }
+        $chain += $pr.ProcessName
+        Write-Host ('    ' + $pr.ProcessName + '  (pid ' + $pr.Id + ')') -ForegroundColor Gray
+        $ci = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $pidCur) -ErrorAction SilentlyContinue
+        if (-not $ci -or -not $ci.ParentProcessId) { break }
+        $pidCur = [int]$ci.ParentProcessId
+    }
+    $hostName = if ($chain.Count -gt 1) { $chain[$chain.Count - 1] } else { $chain[0] }
+    $inWT = ($chain | Where-Object { $_ -like 'WindowsTerminal*' -or $_ -eq 'wt' })
+    $inCode = ($chain | Where-Object { $_ -like 'Code*' })
+    Write-Host ''
+
+    # ---- 3) 已安装的 Windows Terminal
+    Write-Host '  [Windows Terminal]' -ForegroundColor White
+    $pkgs = @(Get-AppxPackage -Name 'Microsoft.WindowsTerminal' -ErrorAction SilentlyContinue)
+    $pkgs += @(Get-AppxPackage -Name 'Microsoft.WindowsTerminalPreview' -ErrorAction SilentlyContinue)
+    if ($pkgs.Count -gt 0) {
+        foreach ($p in $pkgs) { Write-Host ('    ' + $p.Name + '  ' + $p.Version) -ForegroundColor Gray }
+    }
+    else {
+        Write-Host '    没有装 Store 版 Windows Terminal' -ForegroundColor Yellow
+    }
+    Write-Host ''
+
+    # ---- 4) 系统透明效果开关
+    Write-Host '  [系统透明效果]' -ForegroundColor White
+    $tg = '?'
+    try {
+        $tg = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction Stop).EnableTransparency
+    } catch { }
+    Write-Host ('    EnableTransparency = ' + $tg + $(if ($tg -eq 0) { '   ← 关掉了！系统把透明效果整体禁用了' } else { '' })) -ForegroundColor Gray
+    Write-Host ''
+
+    # ---- 5) 结论
+    Write-Host '  [结论]' -ForegroundColor White
+    if ($inWT) {
+        Write-Host '    当前窗口就是 Windows Terminal，用它下面的设置文件 ✓' -ForegroundColor Green
+    }
+    elseif ($inCode) {
+        Write-Host '    当前窗口是 VS Code 的集成终端！' -ForegroundColor Yellow
+        Write-Host '    VS Code 终端不读 Windows Terminal 的 settings.json，所以改透明度、配色、字体都不会生效。' -ForegroundColor Yellow
+        Write-Host '    请按 Win 键搜索 “终端 / Terminal” 打开 Windows Terminal 再试。' -ForegroundColor Yellow
+    }
+    else {
+        Write-Host ('    当前窗口的宿主是 ' + $hostName + '，看起来不是 Windows Terminal。') -ForegroundColor Yellow
+        Write-Host '    只有 Windows Terminal（WindowsTerminal.exe / wt.exe）会读取这些设置；' -ForegroundColor Yellow
+        Write-Host '    双击 cmd 出来的传统控制台窗口不受影响。' -ForegroundColor Yellow
+    }
+    if ($tg -eq 0) {
+        Write-Host '    另外：系统的“透明效果”是关的 —— 设置 → 个性化 → 颜色 → 透明效果 打开。' -ForegroundColor Yellow
+    }
+    Write-Host ''
+    exit 0
 }
 
 if ($env:WT_MODE -eq 'installfonts') {

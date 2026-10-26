@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.9"
+VERSION = "1.0.10"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -375,6 +375,9 @@ class App:
         self.scale_transp.pack(fill="x", pady=(4, 2))
         tk.Label(b, text="0 = 完全不透明 · 100 = 全透（等同 CLBT -transparent 的数值）",
                  bg=CARD, fg=DIM, font=MONO_S, anchor="w").pack(fill="x")
+        tk.Label(b, text="改的是 Windows Terminal 窗口，不是这个界面；点「应用外观」后新开标签页看效果",
+                 bg=CARD, fg="#E5C07B", font=MONO_S, anchor="w", wraplength=430,
+                 justify="left").pack(fill="x")
 
         c, b = self._card(left, "字体（仿 Linux 风格生效）")
         c.pack(fill="x", pady=(0, 8))
@@ -491,6 +494,8 @@ class App:
             btn = self._btn(acts, txt, fn)
             btn.pack(side="left", padx=(8, 0))
             self.action_buttons.append(btn)
+        diag = self._btn(acts, "环境诊断", self._diagnose, bg=CARD, fg=CYAN)
+        diag.pack(side="right", padx=(0, 8))
         self._btn(acts, "清空日志", self._clear_log, bg=CARD, fg=DIM).pack(side="right")
 
     # ---------------- 预填 / 状态
@@ -723,6 +728,10 @@ class App:
 
     def _undo_cmd(self):
         self._run(["--undo-cmd", "/y"], "移除 cmd 提示符")
+
+    def _diagnose(self):
+        """在日志里打印环境诊断：设置文件在哪、当前窗口由谁渲染"""
+        self._run(["-diagnose", "/y"], "环境诊断")
 
     def _install_fonts(self):
         self._run(["-install-fonts", "/y"], "安装内置字体")
