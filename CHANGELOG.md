@@ -1,5 +1,23 @@
 # 更新日志
 
+## v1.0.7
+
+### 压缩包结构
+- CLBT.zip 里现在有三件东西（解压后是一个 CLBT 文件夹）：
+
+  | 文件 | 大小 | 说明 |
+  |---|---|---|
+  | README.txt | 3 KB | 安装与用法说明 |
+  | install.exe | 36 MB | 安装器（自带工具本体与 10 个字体） |
+  | CLBT-GUI.exe | 11 MB | 图形界面，装完直接双击即可 |
+
+- .cmd 仍然由 install.exe 在安装时写出（	erminal-setup.cmd + CLBT.cmd）：
+  工具本体是「批处理 + 内嵌脚本 + 内嵌字体」，对行尾极其敏感，
+  由安装器释放能保证永远是 CRLF，不会被聊天软件/编辑器改成 LF 而报错
+- 压缩包从 35.79 MB 变成 46.42 MB（多出的就是 CLBT-GUI.exe 这一份）
+- 解压目录里的 CLBT-GUI.exe 装完就能直接用（它会自己找
+  C:\Program Files\CLBT\terminal-setup.cmd）；装之前双击会提示找不到工具
+
 ## v1.0.6
 
 ### 全面汉化
