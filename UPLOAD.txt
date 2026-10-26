@@ -36,6 +36,7 @@
 四、检查清单
   [ ] README 里的截图能正常显示（screenshots/ 已包含）
   [ ] LICENSE（字体 OFL 1.1）和 NOTICE.md 都在根目录
+  [ ] 发版前 python bump_version.py --check 通过（各处版本一致）
   [ ] Releases 里只有一个附件：CLBT.zip（内含 install.exe）
   [ ] README 顶部的 Releases 链接可用
   [ ] 仓库里没有 terminal-setup.cmd（33MB 构建产物）

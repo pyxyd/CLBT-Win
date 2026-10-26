@@ -191,6 +191,24 @@ v1.0.2 已修复。旧版本文档区里有中文注释，在 `chcp 65001` 的�
 **exe 没签名？**
 是。签名路线见 [README_SIGN.md](README_SIGN.md)（个人最现实的是 Certum OSS 或 SignPath）。
 
+## 版本号规则
+
+版本号是 `MAJOR.MIDDLE.MINOR`，按 **15 进制** 进位：
+
+- 每 **15 个小版本** 进 1 个中版本：`1.0.15 → 1.1.1`
+- 每 **15 个中版本** 进 1 个大版本：`1.15.15 → 2.0.1`
+- 进位后低位从 1 开始重新计数（`0` 只出现在最初的 `1.0.0`）
+
+唯一版本源是仓库里的 `version.json`，发版时用脚本同步，别手改散落的版本文件：
+
+```bat
+python bump_version.py                 :: 看当前版本 / 下一个版本（预演，不写文件）
+python bump_version.py --next --write  :: 进位并同步 version.json、两个 version_info、clbt_gui.py
+python bump_version.py --set 1.1.3 --write
+python bump_version.py --check         :: 校验各处版本是否与 version.json 一致（发版前必跑）
+python bump_version.py --selftest      :: 进位规则回归用例（1.0.15→1.1.1、1.15.15→2.0.1 等）
+```
+
 ## 仓库结构
 
 ```
