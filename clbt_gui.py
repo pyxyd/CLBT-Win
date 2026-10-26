@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.10"
+VERSION = "1.0.12"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -439,6 +439,10 @@ class App:
         self.entry_bg.pack(side="left", fill="x", expand=True, padx=6)
         self._btn(line, "浏览", self._pick_bg, padx=8).pack(side="left")
 
+        self.lbl_bg_hint = tk.Label(b, text="", bg=CARD, fg=DIM, font=MONO_S,
+                                    anchor="w", wraplength=430, justify="left")
+        self.lbl_bg_hint.pack(fill="x", pady=(4, 0))
+
         g = tk.Frame(b, bg=CARD)
         g.pack(fill="x", pady=(6, 0))
         self.var_bg_op = tk.DoubleVar(value=0.22)
@@ -513,9 +517,13 @@ class App:
         if (cur.get("weight") or "").lower() == "bold":
             self.var_weight.set(WEIGHT_CHOICES[1][0])
         bg = cur.get("bg")
-        if bg and os.path.isfile(bg):
+        if bg:
+            # 文件可能被清理掉了：照样显示路径并保持勾选，避免下一按「应用」就把背景图静默删掉
             self.var_bg.set(bg)
             self.var_bg_on.set(True)
+            self.bg_missing = not os.path.isfile(bg)
+        else:
+            self.bg_missing = False
         bo = cur.get("bgOpacity")
         if isinstance(bo, (int, float)) and 0.01 <= float(bo) <= 1.0:
             self.scale_bgop.set(float(bo))
@@ -534,6 +542,7 @@ class App:
         self._on_transp()
         self._on_bgop()
         self._on_bg_toggle()
+        self._bg_hint()
 
     def _refresh_status(self):
         cur = read_current_settings()
@@ -572,11 +581,23 @@ class App:
         self.var_bg_op.set(v)
         self.lbl_bgop.configure(text=f"{v:.2f}")
 
+    def _bg_hint(self):
+        if getattr(self, "bg_missing", False) and self.var_bg_on.get():
+            self.lbl_bg_hint.configure(
+                text="⚠ settings.json 里的背景图文件已不存在；取消勾选「启用」才能移除它",
+                fg=YELLOW)
+        else:
+            self.lbl_bg_hint.configure(
+                text="图片放在这个路径（会被复制到 %LOCALAPPDATA%\\WindowsCommandLineBeautify）",
+                fg=DIM)
+
     def _on_bg_toggle(self):
         on = bool(self.var_bg_on.get())
         st = "normal" if on else "disabled"
         self.entry_bg.configure(state=st, bg=CARD2 if on else "#101010", fg=FG if on else DIM)
         self.scale_bgop.configure(state=st)
+        if hasattr(self, "lbl_bg_hint"):
+            self._bg_hint()
 
     def _on_acrylic(self):
         on = bool(self.var_acrylic.get())
@@ -703,9 +724,18 @@ class App:
             if not os.path.exists(st["font_file"]):
                 messagebox.showerror(APP_TITLE, f"字体文件不存在：\n{st['font_file']}")
                 return
-        if st["bg_enabled"] and st["bg_path"] and not os.path.isfile(st["bg_path"]):
-            messagebox.showerror(APP_TITLE, f"背景图不存在：\n{st['bg_path']}")
-            return
+        if st["bg_enabled"]:
+            if not st["bg_path"]:
+                messagebox.showerror(APP_TITLE, "勾选了「启用背景图」但没选文件。\n\n" \
+                                                "要么点「浏览」选一张，要么取消勾选。")
+                return
+            if not os.path.isfile(st["bg_path"]):
+                messagebox.showerror(
+                    APP_TITLE,
+                    f"背景图文件不存在：\n{st['bg_path']}\n\n"
+                    "如果它是被清理掉的旧图，请重新选一张；\n"
+                    "如果本来就不想要背景图，先取消勾选「启用」。")
+                return
         if st["cell_height"]:
             try:
                 v = float(st["cell_height"])
@@ -845,7 +875,7 @@ def main():
 
     set_dpi_aware()
     root = tk.Tk()
-    app = App(root)
+    root.app = App(root)   # 挂到 root 上，避免被 GC，也让 pyflakes 不再报未使用
 
     root.mainloop()
     return 0

@@ -137,31 +137,37 @@ function Get-Opacity($json) {
 }
 
 function Set-Foreground([string]$path, $json, [string]$colorHex) {
+    # 写前重读一份最新的：不能用上一轮的旧快照整文件覆盖，否则会吃掉 CLBT/终端刚写入的改动
+    try { $fresh = Get-FileJson $path } catch { $fresh = $json }
     $changed = $false
-    foreach ($s in @($json.schemes)) {
+    foreach ($s in @($fresh.schemes)) {
         if ($null -ne $s -and $s.name -eq $SCHEME) {
             if ($s.foreground -ne $colorHex) { $s.foreground = $colorHex; $changed = $true }
-        }
-    }
-    # cursorColor 跟随，避免深色字配浅色光标
-    foreach ($s in @($json.schemes)) {
-        if ($null -ne $s -and $s.name -eq $SCHEME) {
+            # cursorColor 跟随，避免深色字配浅色光标
             if ($s.cursorColor -ne $colorHex) { $s.cursorColor = $colorHex; $changed = $true }
         }
     }
-    if ($changed) {
-        $out = $json | ConvertTo-Json -Depth 32
-        # 原子写入：先写临时文件再替换，避免 Terminal 读到半截 JSON
-        $tmp = $path + '.clbt-tmp'
+    if (-not $changed) { return $false }
+
+    $out = $fresh | ConvertTo-Json -Depth 32
+    $tmp = $path + '.clbt-tmp'
+    try {
         [System.IO.File]::WriteAllText($tmp, $out, (New-Object System.Text.UTF8Encoding($false)))
         try {
-            [System.IO.File]::Replace($tmp, $path, $null)
-        } catch {
+            # 注意：$null 会被绑定成 ""（报 The path is not of a legal form），必须用 [NullString]::Value
+            [System.IO.File]::Replace($tmp, $path, [NullString]::Value)
+        }
+        catch {
             Copy-Item -LiteralPath $tmp -Destination $path -Force
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
     }
-    return $changed
+    catch {
+        # 写不进去（被独占/只读）时不要让守护整个挂掉
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    return $true
 }
 
 # ---------------------------------------------------------------------
@@ -195,6 +201,14 @@ try {
         $opacity = Get-Opacity $json
         $enabled = ($opacity -lt 75)   # 不透明度 < 75% 才启用自适应
 
+        if (-not $enabled -and $lastMode -eq 'dark-text') {
+            # 不透明度回到 >=75%：把深色字恢复成默认浅色，否则黑底深字看不见
+            if (Set-Foreground $sp $json $FG_LIGHT) {
+                Write-Output ("[{0}] 不透明度 {1}%，前景色恢复默认" -f (Get-Date -Format 'HH:mm:ss'), $opacity)
+            }
+            $lastMode = 'light-text'
+        }
+
         if ($enabled) {
             if ($ForceLum -ge 0) { $lum = $ForceLum }
             else {
@@ -222,7 +236,8 @@ try {
         }
 
         # 找不到终端窗口太久就退出，避免残留进程
-        if ($idleTicks -gt [int]($MaxIdleSec / [Math]::Max(1, $IntervalMs / 1000))) { break }
+        $maxIdleTicks = [int][Math]::Ceiling($MaxIdleSec * 1000.0 / [Math]::Max(200, $IntervalMs))
+        if ($idleTicks -gt $maxIdleTicks) { break }
 
         if ($Once) { break }
         Start-Sleep -Milliseconds $IntervalMs

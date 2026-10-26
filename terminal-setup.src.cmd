@@ -27,8 +27,11 @@ rem   command. Keep every line up to the PS1 marker ASCII-only; put all
 rem   non-ASCII text inside the PowerShell payload, which is read as UTF-8.
 rem   ====================================================================
 setlocal
+rem  remember the console code page (setlocal/endlocal do NOT roll it back)
+set "WT_OLDCP="
+for /f "tokens=2 delims=:" %%c in ('chcp') do set "WT_OLDCP=%%c"
+set "WT_OLDCP=%WT_OLDCP: =%"
 chcp 65001 >nul 2>&1
-title CLBT - Windows Command Line Beautify
 set "WT_SELF=%~f0"
 set "WT_SELF_DIR=%~dp0"
 set "WT_MODE="
@@ -161,10 +164,12 @@ goto :launch
 :arg_gui
 if exist "%~dp0CLBT-GUI.exe" goto :arg_gui_run
 echo CLBT-GUI.exe not found next to this script -- run install.exe first.
-exit /b 1
+set "WT_RC=1"
+goto :done
 :arg_gui_run
 start "" "%~dp0CLBT-GUI.exe" >nul 2>&1
-exit /b 0
+set "WT_RC=0"
+goto :done
 
 :arg_trans
 set "WT_MODE=cli"
@@ -270,7 +275,13 @@ if defined WT_NOPAUSE goto :done
 echo  Press any key to exit . . .
 pause >nul
 :done
+call :restore_cp
 endlocal & exit /b %WT_RC%
+
+:restore_cp
+rem  restore the original code page before leaving
+if defined WT_OLDCP if not "%WT_OLDCP%"=="65001" chcp %WT_OLDCP% >nul 2>&1
+exit /b 0
 
 #::PS1::
 # =====================================================================
@@ -286,10 +297,24 @@ endlocal & exit /b %WT_RC%
 
 $ErrorActionPreference = 'Stop'
 
-# 标题用中文显示（批处理区必须是纯 ASCII，所以在这里设窗口标题）
+# 标题：先记下原值再改，退出时还原（批处理区不设标题，避免退出后残留）
+$__oldTitle = $null
+try { $__oldTitle = $Host.UI.RawUI.WindowTitle } catch { }
 try { $Host.UI.RawUI.WindowTitle = 'Windows 命令行美化工具' } catch { }
 
 $MARK_FONTS = ('#::' + 'FONTS' + '::')   # 拼接构造：正文里不能出现字面量
+
+function Read-Answer {
+    # 交互菜单专用：stdin 被重定向/关闭时直接取消，绝不能当成「空回车 = 默认值」
+    $line = [Console]::In.ReadLine()
+    if ($null -eq $line) {
+        Write-Host ''
+        Write-Host '  输入已结束（stdin 被重定向或关闭），交互菜单需要键盘输入，已取消。' -ForegroundColor Yellow
+        Write-Host '  非交互场景请直接用参数，例如： CLBT -linux -transparent 36' -ForegroundColor Gray
+        exit 1
+    }
+    return $line
+}
 
 function Info($m) { Write-Host $m -ForegroundColor Cyan }
 function Good($m) { Write-Host "  [OK]   $m" -ForegroundColor Green }
@@ -337,6 +362,17 @@ function Get-FontStyleOf([string]$baseName) {
     if ($baseName -match '-Italic$')     { return 'Italic' }
     if ($baseName -match '-Oblique$')    { return 'Italic' }
     return 'Regular'
+}
+
+function Test-FontFamilyInstalled([string]$Name) {
+    # 判断字族名是否真的存在：GDI+ 装上就能 new 出来，不存在会抛
+    if (-not $Name) { return $false }
+    try {
+        if (-not ('System.Drawing.FontFamily' -as [type])) { Add-Type -AssemblyName System.Drawing -ErrorAction Stop }
+        $f = New-Object System.Drawing.FontFamily($Name)
+        return [bool]$f
+    }
+    catch { return $false }
 }
 
 function Get-FamilyOf([string]$path, [string]$fallback) {
@@ -441,6 +477,25 @@ function Install-FontFile([string]$Path) {
 # =====================================================================
 # 核心：应用美化（由 --apply 子进程调用）
 # =====================================================================
+function Save-DefaultsSnapshot($d) {
+    # 第一次改动 defaults 之前，把用户自己配的 font / padding / scrollbarState 存到旁边，
+    # -uninstall 时还原：避免「跑一次 -win 就把你的字体设置删了」
+    try {
+        $dir = Get-AdaptiveDir
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $f = Join-Path $dir 'defaults-snapshot.json'
+        if (Test-Path -LiteralPath $f) { return }
+        $snap = [pscustomobject]@{}
+        foreach ($k in @('font', 'padding', 'scrollbarState')) {
+            if ($d.PSObject.Properties.Name -contains $k) {
+                Add-Member -InputObject $snap -NotePropertyName $k -NotePropertyValue $d.$k
+            }
+        }
+        [System.IO.File]::WriteAllText($f, ($snap | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+    }
+    catch { }
+}
+
 function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity = -1, [string]$Background = '',
     [string]$AdjustColors = '', [string]$CellHeight = '', [string]$Antialiasing = '',
     [string]$BgAlign = '', [string]$BgStretch = '', [string]$BgOpacity = '',
@@ -468,12 +523,32 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
         $backup = "$settingsPath.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
         Copy-Item -LiteralPath $settingsPath -Destination $backup -Force
         Good "已备份: $(Split-Path -Leaf $backup)"
+        # settings.json 通常带整段注释；重写会丢注释与排版，先说清楚（原件在 .bak 里）
+        try {
+            $rawForHint = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false))
+            if ($rawForHint -match '(?m)^\s*(//|/\*)') {
+                Warn 'settings.json 含注释：本次会重写该文件，注释与排版不保留（原文件见上面的 .bak）'
+            }
+        }
+        catch { }
+        # 只留最近 10 份 .bak-*，避免 LocalState 里堆出几百个
+        try {
+            $bkDir = Split-Path -Parent $settingsPath
+            $bkLeaf = Split-Path -Leaf $settingsPath
+            Get-ChildItem -LiteralPath $bkDir -Filter ($bkLeaf + '.bak-*') -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -Skip 10 |
+                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+        }
+        catch { }
 
         $raw = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false))
         $j = (Strip-JsonComments $raw) | ConvertFrom-Json
 
         if (-not ($j.PSObject.Properties.Name -contains 'profiles') -or $null -eq $j.profiles) {
             $j | Add-Member -NotePropertyName 'profiles' -NotePropertyValue ([pscustomobject]@{}) -Force
+        }
+        if ($j.profiles -is [System.Array]) {
+            throw 'settings.json 的 profiles 是旧版数组格式，本工具不支持，请先在 Terminal 里重新生成设置'
         }
         if (-not ($j.profiles.PSObject.Properties.Name -contains 'defaults') -or $null -eq $j.profiles.defaults) {
             Set-Prop $j.profiles 'defaults' ([pscustomobject]@{})
@@ -511,6 +586,7 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
         Set-Prop $j 'schemes' $schemes
 
         $d = $j.profiles.defaults
+        Save-DefaultsSnapshot $d
         Set-Prop $d 'colorScheme' $schemeName
         Set-Prop $d 'opacity'     $Opacity
         Set-Prop $d 'useAcrylic'  $true
@@ -698,7 +774,8 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
 
         $json = $j | ConvertTo-Json -Depth 32
         [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
-        Good "外观已写入（黑色亚克力 36%、方块光标、Tango 配色）"
+        $styleText = if ($Style -eq 'win') { 'Campbell 配色 / 默认光标' } else { '黑色亚克力 / 方块光标 / Tango 配色' }
+        Good ("外观已写入（" + $styleText + "，不透明度 " + $Opacity + "%）")
         if ($Face) { Good "字体: $Face" }
         if ($FontWeight) {
             Good ("字重: " + $(if ($fw -eq 'bold') { '粗体' } else { '常规' }))
@@ -864,8 +941,12 @@ try {
             Bad "组策略强制为 $(if ($mp -ne 'Undefined') { $mp } else { $up })，profile 不会生效，需要管理员处理"
         }
         elseif ($effective -in @('Restricted', 'AllSigned')) {
-            Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
-            Good "原生效策略 $effective，已把当前用户设为 RemoteSigned"
+            # 不替用户改安全策略（实测在 -ExecutionPolicy Bypass 子进程里改会失败，
+            # 而且这类改动不该由美化工具悄悄做）。只把该跑的命令告诉他。
+            Warn "PowerShell 执行策略是 $effective，profile 不会被加载（仿 Linux 提示符/键位不会生效）"
+            Write-Host '       需要你自己执行一次（普通 PowerShell 窗口，不要用 -ExecutionPolicy Bypass）：' -ForegroundColor Gray
+            Write-Host '         Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned' -ForegroundColor Gray
+            Write-Host '      想撤回就把它改回 Restricted；本工具不会改这个设置。' -ForegroundColor DarkGray
         }
         else { Good "执行策略 $effective，profile 可正常加载" }
     }
@@ -880,8 +961,9 @@ try {
         if ($emb.Count -gt 0) { Good "解出内嵌字体 $($emb.Count) 个" }
     } catch { Warn "读取内嵌字体失败: $($_.Exception.Message)" }
 
+    # 只认显式 WT_FONT_DIR（例如 -font 传入的目录）；
+    # 不再默认扫脚本所在目录，否则工具被解压到「含其它字体的目录」时会静默装一堆无关字体
     $extDir = $env:WT_FONT_DIR
-    if (-not $extDir) { $extDir = $env:WT_SELF_DIR }
     if ($extDir -and (Test-Path -LiteralPath $extDir)) {
         $extra = @(Get-ChildItem -LiteralPath $extDir -Filter '*.ttf' -File -ErrorAction SilentlyContinue)
         foreach ($e in $extra) { [void]$fontFiles.Add($e) }
@@ -1021,21 +1103,31 @@ function Install-CmdPrompt {
     if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
 
     $cur = (Get-ItemProperty -Path $key -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
-    $parts = @()
-    if ($cur) {
-        $parts = @($cur -split '&' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and ($_ -notlike '*cmd-prompt.cmd*') })
-    }
-    $parts += ('call "' + $cmdScript + '"')
-    New-ItemProperty -Path $key -Name AutoRun -Value ($parts -join ' & ') -PropertyType String -Force | Out-Null
+    # 只摘掉指向本工具 cmd-prompt.cmd 的那一段，不按 & 切分（别人引号里的 & 不能被掰断）
+    $rest = Remove-OurAutoRun $cur
+    $newVal = if ($rest) { $rest + ' & ' + ('call "' + $cmdScript + '"') } else { ('call "' + $cmdScript + '"') }
+    New-ItemProperty -Path $key -Name AutoRun -Value $newVal -PropertyType String -Force | Out-Null
+}
+
+function Remove-OurAutoRun([string]$cur) {
+    # 从 AutoRun 里摘掉本工具那一段：call "...cmd-prompt.cmd" 及其前后多余的 &
+    if (-not $cur) { return $null }
+    $pat = '(?i)(\s*&\s*)?call\s+"[^"]*cmd-prompt\.cmd"\s*(&\s*)?'
+    $r = [regex]::Replace($cur, $pat, ' ')
+    $r = $r -replace '(\s*&\s*){2,}', ' & '        # 合并空段
+    $r = $r.Trim()
+    $r = $r -replace '^\s*&\s*', '' -replace '\s*&\s*$', ''
+    if ([string]::IsNullOrWhiteSpace($r)) { return $null }
+    return $r
 }
 
 function Remove-CmdPrompt {
     $key = 'HKCU:\Software\Microsoft\Command Processor'
     $cur = (Get-ItemProperty -Path $key -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
     if ($cur) {
-        $parts = @($cur -split '&' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and ($_ -notlike '*cmd-prompt.cmd*') })
-        if ($parts.Count -gt 0) {
-            Set-ItemProperty -Path $key -Name AutoRun -Value ($parts -join ' & ')
+        $rest = Remove-OurAutoRun $cur
+        if ($rest) {
+            Set-ItemProperty -Path $key -Name AutoRun -Value $rest
         } else {
             Remove-ItemProperty -Path $key -Name AutoRun -ErrorAction SilentlyContinue
         }
@@ -1082,10 +1174,21 @@ function Set-EncodingMode([bool]$On) {
         $cl = [string]$prof.commandline
         if ($cl -notmatch 'cmd\.exe') { continue }
 
-        # 先清掉本工具之前加的那段，避免重复叠加
+        # 先清掉本工具之前加的那段（行尾追加式 / 行内 & 式都清），避免重复叠加
         $clean = $cl -replace '\s*/k\s+chcp\s+65001\s*>\s*nul\s*$', ''
+        $clean = $clean -replace '(?i)chcp\s+65001\s*>\s*nul\s*&\s*', ''
         if ($On) {
-            $prof.commandline = ($clean.TrimEnd() + ' /k chcp 65001 >nul')
+            $base = $clean.TrimEnd()
+            $kIdx = $base.IndexOf('/k ', [System.StringComparison]::OrdinalIgnoreCase)
+            if ($kIdx -ge 0) {
+                # 已有 /k：把 chcp 插进同一条启动命令（cmd 只认第一个 /k，不能追加第二个）
+                $insertAt = $kIdx + 3
+                $prof.commandline = $base.Substring(0, $insertAt) + 'chcp 65001 >nul & ' +
+                    $base.Substring($insertAt).TrimStart()
+            }
+            else {
+                $prof.commandline = ($base + ' /k chcp 65001 >nul')
+            }
         }
         else {
             $prof.commandline = $clean.TrimEnd()
@@ -1142,6 +1245,18 @@ function Invoke-Uninstall {
             }
             if ($d.PSObject.Properties.Name -contains 'font') { $d.PSObject.Properties.Remove('font') }
 
+            # 还原用户原先自己配的字体/内边距/滚动条
+            try {
+                $snapFile = Join-Path (Get-AdaptiveDir) 'defaults-snapshot.json'
+                if (Test-Path -LiteralPath $snapFile) {
+                    $snap = (Get-Content -LiteralPath $snapFile -Raw -Encoding UTF8) | ConvertFrom-Json
+                    foreach ($pp in $snap.PSObject.Properties) { Set-Prop $d $pp.Name $pp.Value }
+                    Remove-Item -LiteralPath $snapFile -Force -ErrorAction SilentlyContinue
+                    $done += '已还原你原先的字体/内边距/滚动条设置'
+                }
+            }
+            catch { }
+
 
             # 移除本工具新增的配色方案
             if ($j.PSObject.Properties.Name -contains 'schemes' -and $null -ne $j.schemes) {
@@ -1152,15 +1267,20 @@ function Invoke-Uninstall {
             foreach ($k in @('adjustIndistinguishableColors', 'antialiasingMode')) {
                 if ($d.PSObject.Properties.Name -contains $k) { $d.PSObject.Properties.Remove($k) }
             }
-            $json = $j | ConvertTo-Json -Depth 32
-            [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+            # 先改内存里的命令行，最后再一次性写盘（否则改动永远落不了盘）
             foreach ($prof in @($j.profiles.list)) {
                 if ($null -ne $prof -and ([string]$prof.commandline) -match 'chcp\s+65001') {
-                    $prof.commandline = (([string]$prof.commandline) -replace '\s*/k\s+chcp\s+65001\s*>\s*nul\s*$', '').TrimEnd()
+                    $c1 = [string]$prof.commandline
+                    $c1 = $c1 -replace '\s*/k\s+chcp\s+65001\s*>\s*nul\s*$', ''
+                    $c1 = $c1 -replace '(?i)chcp\s+65001\s*>\s*nul\s*&\s*', ''
+                    $prof.commandline = $c1.TrimEnd()
                     $done += '已还原 cmd 标签的代码页设置'
                 }
             }
+            $json = $j | ConvertTo-Json -Depth 32
+            [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
             $done += '终端外观已还原（Campbell / 不透明 / 默认光标与字体）'
+
             $bgDir2 = Join-Path $env:LOCALAPPDATA 'WindowsCommandLineBeautify'
             if ($env:WT_ADAPTIVE_DIR) { $bgDir2 = $env:WT_ADAPTIVE_DIR }
             $removed = 0
@@ -1460,6 +1580,10 @@ function Install-Adaptive {
         }
     }
 
+    # 上一轮如果留下了停止标志，新守护会立刻自杀；这里先清掉
+    $staleFlag = Join-Path $dir 'adaptive-watch.stop'
+    Remove-Item -LiteralPath $staleFlag -Force -ErrorAction SilentlyContinue
+
     try {
         Start-Process -FilePath 'powershell.exe' `
             -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$awPath`"") `
@@ -1473,7 +1597,6 @@ function Remove-Adaptive {
     $dir = Get-AdaptiveDir
     $stopFlag = Join-Path $dir 'adaptive-watch.stop'
     if (Test-Path -LiteralPath $dir) {
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         [System.IO.File]::WriteAllText($stopFlag, 'stop', (New-Object System.Text.UTF8Encoding($false)))
         # 等一下让守护自己退出（最多 4 秒）
         $exited = $false
@@ -1489,7 +1612,15 @@ function Remove-Adaptive {
             Good '自适应守护已退出'
         }
         else {
-            Good '已写入停止标志（守护会在下一轮采样后自行退出）'
+            # 没等到退出：强杀，然后把标志清掉（否则下次 -adaptive 新守护第一轮就自杀）
+            try {
+                Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.CommandLine -and $_.CommandLine -like '*adaptive-watch.ps1*' -and $_.ProcessId -ne $PID } |
+                    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+                Good '自适应守护已强制结束'
+            }
+            catch { Warn ('强制结束守护失败: ' + $_.Exception.Message) }
+            Remove-Item -LiteralPath $stopFlag -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -1580,6 +1711,8 @@ function Show-CliHelp {
 # =====================================================================
 # 入口分发
 # =====================================================================
+try {
+
 if ($env:WT_MODE -eq 'help') {
     Show-CliHelp
     exit 0
@@ -1812,7 +1945,53 @@ if ($env:WT_MODE -eq 'cli') {
 
     if (-not $opText) { $opText = ('不透明度 ' + $op + '%') }
 
+    # ---- 先把该报错的都报完，再动 settings.json（失败不该留下备份/半成品）----
+    if ($env:WT_BGOPACITY) {
+        $tmpOp = 0.0
+        if (-not [double]::TryParse($env:WT_BGOPACITY, [ref]$tmpOp) -or $tmpOp -lt 0.0 -or $tmpOp -gt 1.0) {
+            Write-Host ("背景图浓淡需要 0-1 之间的小数（如 0.22），收到: " + $env:WT_BGOPACITY) -ForegroundColor Red
+            exit 2
+        }
+    }
+    if ($env:WT_BGALIGN) {
+        $okAlign = @('center', 'top', 'bottom', 'left', 'right', 'topLeft', 'topRight', 'bottomLeft', 'bottomRight')
+        if ($env:WT_BGALIGN -notin $okAlign) {
+            Write-Host ("背景图对齐只能是 " + ($okAlign -join ' / ') + "，收到: " + $env:WT_BGALIGN) -ForegroundColor Red
+            exit 2
+        }
+    }
+    if ($env:WT_BGSTRETCH) {
+        $okStretch = @('fill', 'none', 'uniform', 'uniformToFill')
+        if ($env:WT_BGSTRETCH -notin $okStretch) {
+            Write-Host ("背景图拉伸只能是 " + ($okStretch -join ' / ') + "，收到: " + $env:WT_BGSTRETCH) -ForegroundColor Red
+            exit 2
+        }
+    }
+    if ($env:WT_CELLHEIGHT) {
+        $tmpCh = 0.0
+        if (-not [double]::TryParse($env:WT_CELLHEIGHT, [ref]$tmpCh) -or $tmpCh -lt 0.8 -or $tmpCh -gt 2.0) {
+            Write-Host ("行高需要 0.8-2.0 之间的数字（如 1.2），收到: " + $env:WT_CELLHEIGHT) -ForegroundColor Red
+            exit 2
+        }
+    }
+    if ($env:WT_AA -and $env:WT_AA -notin @('grayscale', 'cleartype', 'aliased')) {
+        Write-Host ("抗锯齿只能是 grayscale / cleartype / aliased，收到: " + $env:WT_AA) -ForegroundColor Red
+        exit 2
+    }
+    if ($env:WT_ADJUST -and $env:WT_ADJUST -notin @('always', 'indexed', 'never')) {
+        Write-Host ("颜色修正只能是 always / indexed / never，收到: " + $env:WT_ADJUST) -ForegroundColor Red
+        exit 2
+    }
+    if ($env:WT_ACRYLIC) {
+        $okAc = @('on', 'off', 'true', 'false', '1', '0', '开', '关', '开启', '关闭')
+        if ($env:WT_ACRYLIC.Trim().ToLower() -notin $okAc) {
+            Write-Host ("亚克力只能是 on / off（开 / 关），收到: " + $env:WT_ACRYLIC) -ForegroundColor Red
+            exit 2
+        }
+    }
+
     $cliFace = ''
+    $faceMissing = $false
     if ($env:WT_FONTFILE) {
         try {
             $cliFace = Install-FontFile $env:WT_FONTFILE
@@ -1825,6 +2004,9 @@ if ($env:WT_MODE -eq 'cli') {
     }
     elseif ($env:WT_FACE) {
         $cliFace = [string]$env:WT_FACE
+        # 这里只提示，不丢弃：内置字体是在 Invoke-Beautify 第 3 步才安装的，
+        # 新机器首次指定内置字族时此刻还查不到，丢弃会误伤
+        $faceMissing = -not (Test-FontFamilyInstalled $cliFace)
         Write-Host ("  使用字族: " + $cliFace) -ForegroundColor Cyan
     }
     elseif ($style -eq 'linux') { $cliFace = '0xProto Mono Italic' }
@@ -1841,6 +2023,15 @@ if ($env:WT_MODE -eq 'cli') {
         }
         else {
             Write-Host ('  完成：仿 Linux 风格' + $styleNote + '，' + $opText) -ForegroundColor Green
+        }
+        if ($faceMissing) {
+            if (Test-FontFamilyInstalled $cliFace) {
+                Good ("字族 " + $cliFace + " 本次运行已装好，Terminal 可直接使用")
+            }
+            else {
+                Write-Host ("  [!!] 系统里仍找不到字族: " + $cliFace + "，Terminal 会回退到默认字体") -ForegroundColor Yellow
+                Write-Host '       检查拼写，或先跑 CLBT -install-fonts 装内置字体；CLBT -help 里有可用字族名' -ForegroundColor DarkGray
+            }
         }
         Write-Host '  新开终端标签页生效；已经是新标签页则重启终端。' -ForegroundColor DarkGray
         Write-Host ''
@@ -1910,7 +2101,7 @@ Write-Host ''
 $opPick = $null
 for ($otry = 0; $otry -lt 3; $otry++) {
     Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
-    $inpO = [Console]::In.ReadLine()
+    $inpO = Read-Answer
     if ($null -eq $inpO) { $inpO = '' }
     $inpO = $inpO.Trim()
     if ($inpO -eq '') { $opPick = 1; break }
@@ -1947,7 +2138,7 @@ Write-Host ''
 $stylePick = $null
 for ($stry = 0; $stry -lt 3; $stry++) {
     Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
-    $inpS = [Console]::In.ReadLine()
+    $inpS = Read-Answer
     if ($null -eq $inpS) { $inpS = '' }
     $inpS = $inpS.Trim()
     if ($inpS -eq '') { $stylePick = 1; break }
@@ -1979,7 +2170,7 @@ Write-Host ''
 $chosenTransp = $null
 for ($ttry = 0; $ttry -lt 3; $ttry++) {
     Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
-    $inpT = [Console]::In.ReadLine()
+    $inpT = Read-Answer
     if ($null -eq $inpT) { $inpT = '' }
     $inpT = $inpT.Trim()
     if ($inpT -eq '') { $chosenTransp = $defTransp; break }
@@ -2088,7 +2279,7 @@ Write-Host ''
 $choice = $null
 for ($try = 0; $try -lt 3; $try++) {
     Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
-    $inp = [Console]::In.ReadLine()
+    $inp = Read-Answer
     if ($null -eq $inp) { $inp = '' }
     $inp = $inp.Trim()
     if ($inp -eq '') { $choice = $defaultIdx; break }
@@ -2106,7 +2297,7 @@ $faceDesc = ''
 if ($choice -eq $customIdx) {
     for ($cp = 0; $cp -lt 3; $cp++) {
         Write-Host '  请输入字体文件路径（原样粘贴，可直接回车取消）: ' -NoNewline -ForegroundColor DarkCyan
-        $fp = [Console]::In.ReadLine()
+        $fp = Read-Answer
         if ($null -eq $fp) { $fp = '' }
         $fp = $fp.Trim().Trim('"').Trim()
         if (-not $fp) { break }
@@ -2142,7 +2333,7 @@ Write-Host '是否让 cmd（命令提示符）也使用仿 Linux 提示符？' -
 Write-Host '  [y] 是 —— 写入 HKCU 的 AutoRun 项，对所有 cmd 生效（可用 --undo-cmd 撤销）' -ForegroundColor Gray
 Write-Host '  [N] 否 —— 只改 PowerShell（默认，直接回车）' -ForegroundColor Gray
 Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
-$ansCmd = [Console]::In.ReadLine()
+$ansCmd = Read-Answer
 if ($null -eq $ansCmd) { $ansCmd = '' }
 $ansCmd = $ansCmd.Trim().ToLower()
 $cmdOn = ($ansCmd -eq 'y' -or $ansCmd -eq 'yes' -or $ansCmd -eq '是')
@@ -2155,7 +2346,7 @@ Write-Host ''
 Write-Host '是否设置背景图片（png/jpg/jpeg/gif/bmp，可与透明度叠加）？' -ForegroundColor White
 Write-Host '  直接回车跳过；输入 off 移除已有背景图；或粘贴图片完整路径' -ForegroundColor Gray
 Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
-$ansBg = [Console]::In.ReadLine()
+$ansBg = Read-Answer
 if ($null -eq $ansBg) { $ansBg = '' }
 $ansBg = $ansBg.Trim().Trim('"').Trim()
 $env:WT_BACKGROUND = $ansBg
@@ -2168,42 +2359,42 @@ Write-Host ''
 # ---- 高级外观微调（对应 -adjust-colors / -cell-height / -antialiasing / -bg-align / -bg-stretch）----
 Write-Host '是否微调高级外观（行高 / 抗锯齿 / 颜色修正 / 背景对齐）？(y/N，回车跳过)' -ForegroundColor White
 Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
-$ansAdv = [Console]::In.ReadLine()
+$ansAdv = Read-Answer
 if ($null -eq $ansAdv) { $ansAdv = '' }
 if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
     Write-Host ''
     Write-Host '  行高 (0.8-2.0，如 1.2；直接回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
-    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    $v = Read-Answer
     $v = $v.Trim(); if ($v) { $env:WT_CELLHEIGHT = $v }
 
     Write-Host '  抗锯齿 1) 灰度柔和  2) 清晰锐利  3) 像素风   (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
-    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    $v = Read-Answer
     switch ($v.Trim()) {
         '1' { $env:WT_AA = 'grayscale' } '2' { $env:WT_AA = 'cleartype' } '3' { $env:WT_AA = 'aliased' }
         '灰度柔和' { $env:WT_AA = 'grayscale' } '清晰锐利' { $env:WT_AA = 'cleartype' } '像素风' { $env:WT_AA = 'aliased' }
     }
 
     Write-Host '  亚克力磨砂 1) 开（磨砂玻璃，看不清桌面） 2) 关（真透明，看得到桌面）  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
-    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    $v = Read-Answer
     switch ($v.Trim()) {
         '1' { $env:WT_ACRYLIC = 'on' } '2' { $env:WT_ACRYLIC = 'off' }
         '开' { $env:WT_ACRYLIC = 'on' } '关' { $env:WT_ACRYLIC = 'off' }
     }
 
     Write-Host '  字重 1) 常规 2) 粗体   (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
-    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    $v = Read-Answer
     switch ($v.Trim()) {
         '1' { $env:WT_FONTWEIGHT = 'normal' } '2' { $env:WT_FONTWEIGHT = 'bold' }
         '常规' { $env:WT_FONTWEIGHT = 'normal' } '粗体' { $env:WT_FONTWEIGHT = 'bold' }
     }
 
     Write-Host '  自动修正不可辨认颜色（让看不清的颜色自动变亮/变深）？(y/N，回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
-    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    $v = Read-Answer
     if ($v.Trim().ToLower() -in @('y', 'yes', '是')) { $env:WT_ADJUST = 'always' }
     elseif ($v.Trim().ToLower() -in @('n', 'no', '否')) { $env:WT_ADJUST = 'never' }
 
     Write-Host '  背景图对齐 1) 居中 2) 顶部 3) 底部 4) 左侧 5) 右侧 6) 左上 7) 右上 8) 左下 9) 右下  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
-    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    $v = Read-Answer
     switch ($v.Trim()) {
         '1' { $env:WT_BGALIGN = 'center' } '2' { $env:WT_BGALIGN = 'top' } '3' { $env:WT_BGALIGN = 'bottom' }
         '4' { $env:WT_BGALIGN = 'left' } '5' { $env:WT_BGALIGN = 'right' } '6' { $env:WT_BGALIGN = 'topLeft' }
@@ -2214,11 +2405,11 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
     }
 
     Write-Host '  背景图浓淡 (0.15-0.75，越小越透；回车 = 跟随窗口透明度): ' -NoNewline -ForegroundColor DarkCyan
-    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    $v = Read-Answer
     $v = $v.Trim(); if ($v) { $env:WT_BGOPACITY = $v }
 
     Write-Host '  背景图拉伸 1) 铺满并裁剪（推荐） 2) 拉伸填满（会变形） 3) 完整显示（留黑边） 4) 原始尺寸  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
-    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    $v = Read-Answer
     switch ($v.Trim()) {
         '1' { $env:WT_BGSTRETCH = 'uniformToFill' } '2' { $env:WT_BGSTRETCH = 'fill' }
         '3' { $env:WT_BGSTRETCH = 'uniform' } '4' { $env:WT_BGSTRETCH = 'none' }
@@ -2249,7 +2440,7 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
 Write-Host '是否启用自适应前景色（窗口透明时按背景明暗自动切换字体深浅）？' -ForegroundColor White
 Write-Host '  [y] 开启    [off] 关闭并卸载    [N] 保持不变（默认，直接回车）' -ForegroundColor Gray
 Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
-$ansAw = [Console]::In.ReadLine()
+$ansAw = Read-Answer
 if ($null -eq $ansAw) { $ansAw = '' }
 $ansAw = $ansAw.Trim().ToLower()
 $awMode = 'keep'
@@ -2288,9 +2479,14 @@ try {
 
     if ($child) {
         $i = 0
+        $deadline = (Get-Date).AddSeconds(300)   # 最多等 5 分钟，避免卡在网络路径上一直转圈
         while (-not $child.HasExited) {
             Write-Host ("`r  {0} {1} · · · · · ·" -f $frames[$i % 4], $label) -NoNewline -ForegroundColor DarkCyan
             $i++
+            if ((Get-Date) -gt $deadline) {
+                try { $child.Kill() } catch { }
+                throw '应用超时（5 分钟），已终止子进程；请检查背景图/字体路径是否在网络位置上'
+            }
             Start-Sleep -Milliseconds 110
         }
         $child.WaitForExit()
@@ -2317,6 +2513,13 @@ finally {
     Write-Host "`r" -NoNewline
     Write-Host (' ' * 46) -NoNewline
     Write-Host "`r" -NoNewline
+    # 无论成功、失败还是 Ctrl+C 中断，都把临时产物清掉
+    if ($catalogStage -and (Test-Path -LiteralPath $catalogStage)) {
+        Remove-Item -LiteralPath $catalogStage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($lg in @($outLog, $errLog, $statusFile)) {
+        if ($lg) { Remove-Item -LiteralPath $lg -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 if ($ok) {
@@ -2351,5 +2554,14 @@ else {
 }
 Write-Host ''
 
-if ($catalogStage -and (Test-Path -LiteralPath $catalogStage)) { Remove-Item -LiteralPath $catalogStage -Recurse -Force -ErrorAction SilentlyContinue }
-foreach ($lg in @($outLog, $errLog, $statusFile)) { Remove-Item -LiteralPath $lg -Force -ErrorAction SilentlyContinue }
+}
+finally {
+    # 退出前把窗口标题还原（#15），代码页由批处理的 :restore_cp 负责
+    if ($__oldTitle) { try { $Host.UI.RawUI.WindowTitle = $__oldTitle } catch { } }
+    if ($catalogStage -and (Test-Path -LiteralPath $catalogStage)) {
+        Remove-Item -LiteralPath $catalogStage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($lg in @($outLog, $errLog, $statusFile)) {
+        if ($lg) { Remove-Item -LiteralPath $lg -Force -ErrorAction SilentlyContinue }
+    }
+}
