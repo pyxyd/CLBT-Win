@@ -735,8 +735,10 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
                 }
             }
             else {
-                # 图片当「水印」：约取窗口不透明度的 0.6 倍，叠加后总不透明度仅略微上升
-                $imgOp = [Math]::Round([Math]::Min(0.70, [Math]::Max(0.10, ($Opacity / 100.0) * 0.6)), 2)
+                # 旧的「水印公式」= 不透明度×0.6：36% 时只有 0.22，图片几乎看不见
+                # （实测画面只从 RGB(0,11,10) 变到 (63,56,32)，用户反馈"开没开一样"）
+                # 改成固定 0.55：图片明显可见，又不至于盖住文字；需要更浓/更淡用 -bg-opacity
+                $imgOp = 0.55
             }
             Set-Prop $d 'backgroundImageOpacity'    $imgOp
             Good ("背景图浓淡: " + $imgOp + "（窗口不透明度 " + $Opacity + "%）")
@@ -1678,7 +1680,7 @@ function Show-CliHelp {
     Write-Host '    CLBT -bg-align <对齐>         背景图对齐: 居中 center / 顶部 top / 底部 bottom / 左侧 left / 右侧 right' -ForegroundColor Gray
     Write-Host '                                 另有 左上 topLeft / 右上 topRight / 左下 bottomLeft / 右下 bottomRight' -ForegroundColor DarkGray
     Write-Host '    CLBT -bg-stretch <拉伸>       背景图拉伸: 铺满并裁剪 uniformToFill / 拉伸填满 fill / 完整显示 uniform / 原始尺寸 none' -ForegroundColor Gray
-    Write-Host '    CLBT -bg-opacity <0-1>        背景图浓淡（越小越透；默认跟随窗口透明度）' -ForegroundColor Gray
+    Write-Host '    CLBT -bg-opacity <0-1>        背景图浓淡（0-1，默认 0.55；越小越透）' -ForegroundColor Gray
     Write-Host '    CLBT -cell-height <0.8-2.0>   行高（如 1.2，越大行距越松）' -ForegroundColor Gray
     Write-Host '    CLBT -antialiasing <模式>     抗锯齿: 灰度柔和 grayscale / 清晰锐利 cleartype / 像素风 aliased' -ForegroundColor Gray
     Write-Host '    CLBT -adjust-colors <策略>    颜色修正: 总是修正 always / 仅索引色 indexed / 不修正 never' -ForegroundColor Gray
@@ -1949,7 +1951,7 @@ if ($env:WT_MODE -eq 'cli') {
     if ($env:WT_BGOPACITY) {
         $tmpOp = 0.0
         if (-not [double]::TryParse($env:WT_BGOPACITY, [ref]$tmpOp) -or $tmpOp -lt 0.0 -or $tmpOp -gt 1.0) {
-            Write-Host ("背景图浓淡需要 0-1 之间的小数（如 0.22），收到: " + $env:WT_BGOPACITY) -ForegroundColor Red
+            Write-Host ("背景图浓淡需要 0-1 之间的小数（如 0.55），收到: " + $env:WT_BGOPACITY) -ForegroundColor Red
             exit 2
         }
     }
@@ -2404,7 +2406,7 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
         '右上' { $env:WT_BGALIGN = 'topRight' } '左下' { $env:WT_BGALIGN = 'bottomLeft' } '右下' { $env:WT_BGALIGN = 'bottomRight' }
     }
 
-    Write-Host '  背景图浓淡 (0.15-0.75，越小越透；回车 = 跟随窗口透明度): ' -NoNewline -ForegroundColor DarkCyan
+    Write-Host '  背景图浓淡 (0.15-0.9，越小越透；直接回车 = 默认 0.55): ' -NoNewline -ForegroundColor DarkCyan
     $v = Read-Answer
     $v = $v.Trim(); if ($v) { $env:WT_BGOPACITY = $v }
 

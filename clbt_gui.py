@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.12"
+VERSION = "1.0.13"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -445,12 +445,12 @@ class App:
 
         g = tk.Frame(b, bg=CARD)
         g.pack(fill="x", pady=(6, 0))
-        self.var_bg_op = tk.DoubleVar(value=0.22)
+        self.var_bg_op = tk.DoubleVar(value=0.55)
         tk.Label(g, text="浓淡", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=0, sticky="w")
-        self.scale_bgop = self._slider(g, 0.05, 0.95, 0.22, res=0.01, length=120,
+        self.scale_bgop = self._slider(g, 0.05, 0.95, 0.55, res=0.01, length=120,
                                        cb=lambda v: self._on_bgop())
         self.scale_bgop.grid(row=0, column=1, sticky="w", padx=6)
-        self.lbl_bgop = tk.Label(g, text="0.22", bg=CARD, fg=FG, font=MONO_S, width=4, anchor="w")
+        self.lbl_bgop = tk.Label(g, text="0.55", bg=CARD, fg=FG, font=MONO_S, width=4, anchor="w")
         self.lbl_bgop.grid(row=0, column=2, sticky="w")
 
         g2 = tk.Frame(b, bg=CARD)
@@ -807,7 +807,7 @@ def selftest():
     print(f"settings  = {cur.get('path') if cur else '未找到'}")
     base = {"style": "linux", "transparent": 64, "acrylic": True,
             "bg_enabled": False, "bg_path": "",
-            "bg_opacity": 0.22, "bg_align": "center", "bg_stretch": "uniformToFill",
+            "bg_opacity": 0.55, "bg_align": "center", "bg_stretch": "uniformToFill",
             "font_mode": "face", "face": "0xProto Mono Italic", "weight": "normal", "font_file": "",
             "cell_height": "", "aa": "", "adjust": ""}
     print("默认状态 ->", build_apply_args(base))

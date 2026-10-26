@@ -59,7 +59,7 @@ CLBT -opacity 60                       不透明度（与 Terminal 的 opacity �
 
 CLBT -background "D:\pics\bg.png"      背景图（png/jpg/jpeg/gif/bmp，也可给目录）
 CLBT -background off                   移除背景图
-CLBT -bg-opacity 0.22                  背景图浓淡（默认跟随窗口透明度）
+CLBT -bg-opacity 0.55                  背景图浓淡（默认 0.55；越小越透）
 CLBT -bg-align topLeft                 对齐：center/top/bottom/left/right/topLeft/...
 CLBT -bg-stretch uniform               拉伸：uniformToFill/fill/uniform/none
 
