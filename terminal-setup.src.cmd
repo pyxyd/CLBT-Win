@@ -34,6 +34,7 @@ set "WT_SELF_DIR=%~dp0"
 set "WT_MODE="
 set "WT_FACE="
 set "WT_FONTWEIGHT="
+set "WT_ACRYLIC="
 set "WT_NOPAUSE="
 set "WT_STYLE="
 set "WT_TRANSPARENT="
@@ -62,6 +63,8 @@ if /i "%~1"=="-transparent" goto :arg_trans
 if /i "%~1"=="-font" goto :arg_font
 if /i "%~1"=="--font" goto :arg_font
 if /i "%~1"=="-face" goto :arg_face
+if /i "%~1"=="-acrylic" goto :arg_acrylic
+if /i "%~1"=="--acrylic" goto :arg_acrylic
 if /i "%~1"=="-font-weight" goto :arg_fontweight
 if /i "%~1"=="--font-weight" goto :arg_fontweight
 if /i "%~1"=="--face" goto :arg_face
@@ -127,6 +130,13 @@ goto :parse
 :arg_face
 set "WT_MODE=cli"
 set "WT_FACE=%~2"
+shift
+shift
+goto :parse
+
+:arg_acrylic
+set "WT_MODE=cli"
+set "WT_ACRYLIC=%~2"
 shift
 shift
 goto :parse
@@ -428,7 +438,7 @@ function Install-FontFile([string]$Path) {
 function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity = -1, [string]$Background = '',
     [string]$AdjustColors = '', [string]$CellHeight = '', [string]$Antialiasing = '',
     [string]$BgAlign = '', [string]$BgStretch = '', [string]$BgOpacity = '',
-    [string]$FontWeight = '') {
+    [string]$FontWeight = '', [string]$Acrylic = '') {
     # Opacity < 0 表示按风格取默认值（linux 36% / win 100%）
     if ($Opacity -lt 0) { $Opacity = if ($Style -eq 'win') { 100 } else { 36 } }
 
@@ -498,6 +508,14 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
         Set-Prop $d 'colorScheme' $schemeName
         Set-Prop $d 'opacity'     $Opacity
         Set-Prop $d 'useAcrylic'  $true
+        # -acrylic off：关掉磨砂亚克力，opacity 才会呈现「真透明」
+        if ($Acrylic) {
+            $ac = $Acrylic.Trim().ToLower()
+            if ($ac -in @('on', 'true', '1', '开', '开启')) { Set-Prop $d 'useAcrylic' $true }
+            elseif ($ac -in @('off', 'false', '0', '关', '关闭')) { Set-Prop $d 'useAcrylic' $false }
+            else { throw "acrylic 只能是 on / off（开 / 关）" }
+            Good ("亚克力: " + $(if ($ac -in @('on', 'true', '1', '开', '开启')) { '磨砂玻璃（开）' } else { '关闭（真透明）' }))
+        }
         Set-Prop $d 'cursorShape' 'filledBox'
         Set-Prop $d 'padding'     '10, 8'
         Set-Prop $d 'bellStyle'   'none'
@@ -509,6 +527,12 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
             # 不透明度同样生效（win 默认 100，可由 -transparent 覆盖）
             Set-Prop $d 'opacity'     $Opacity
             Set-Prop $d 'useAcrylic'  $false
+            if ($Acrylic) {
+                $ac = $Acrylic.Trim().ToLower()
+                if ($ac -in @('on', 'true', '1', '开', '开启')) { Set-Prop $d 'useAcrylic' $true }
+                elseif ($ac -in @('off', 'false', '0', '关', '关闭')) { Set-Prop $d 'useAcrylic' $false }
+                else { throw "acrylic 只能是 on / off（开 / 关）" }
+            }
             Set-Prop $d 'cursorShape' 'bar'
             Set-Prop $d 'bellStyle'   'audible'
             if ($d.PSObject.Properties.Name -contains 'padding') { $d.PSObject.Properties.Remove('padding') }
@@ -1525,6 +1549,7 @@ function Show-CliHelp {
     Write-Host '    CLBT -font "<字体文件路径>"    安装并使用指定字体（.ttf/.otf/.ttc，或目录）' -ForegroundColor Gray
     Write-Host '    CLBT -face "<字体族名>"        直接用已安装的字族（如 0xProto Nerd Font Mono）' -ForegroundColor Gray
     Write-Host '    CLBT -font-weight <字重>      字重: 常规 normal / 粗体 bold' -ForegroundColor Gray
+    Write-Host '    CLBT -acrylic on|off          亚克力磨砂: 开（默认，磨砂玻璃）/ 关（真透明，看得到桌面）' -ForegroundColor Gray
     Write-Host '    CLBT -install-fonts          只安装内置的 10 个字体，不改任何设置' -ForegroundColor Gray
     Write-Host '    CLBT -gui                    打开图形界面（等同于双击 CLBT-GUI.exe）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive                开启自适应前景色（透明时按背景明暗切字体深浅）' -ForegroundColor Gray
@@ -1702,7 +1727,8 @@ if ($env:WT_MODE -eq 'cli') {
         Invoke-Beautify -Face $cliFace -Style $style -Opacity $op -Background ([string]$env:WT_BACKGROUND) `
         -AdjustColors ([string]$env:WT_ADJUST) -CellHeight ([string]$env:WT_CELLHEIGHT) `
         -Antialiasing ([string]$env:WT_AA) -BgAlign ([string]$env:WT_BGALIGN) -BgStretch ([string]$env:WT_BGSTRETCH) `
-        -BgOpacity ([string]$env:WT_BGOPACITY) -FontWeight ([string]$env:WT_FONTWEIGHT)
+        -BgOpacity ([string]$env:WT_BGOPACITY) -FontWeight ([string]$env:WT_FONTWEIGHT) `
+        -Acrylic ([string]$env:WT_ACRYLIC)
         Write-Host ''
         if ($style -eq 'win') {
             Write-Host ('  完成：Windows 原生风格' + $styleNote + '（' + $opText + '、默认配色、默认提示符）') -ForegroundColor Green
@@ -1746,7 +1772,8 @@ if ($env:WT_MODE -eq 'apply') {
         Invoke-Beautify -Face ([string]$env:WT_FACE) -Style $apStyle -Opacity $apOpacity -Background ([string]$env:WT_BACKGROUND) `
             -AdjustColors ([string]$env:WT_ADJUST) -CellHeight ([string]$env:WT_CELLHEIGHT) `
             -Antialiasing ([string]$env:WT_AA) -BgAlign ([string]$env:WT_BGALIGN) -BgStretch ([string]$env:WT_BGSTRETCH) `
-            -BgOpacity ([string]$env:WT_BGOPACITY) -FontWeight ([string]$env:WT_FONTWEIGHT)
+            -BgOpacity ([string]$env:WT_BGOPACITY) -FontWeight ([string]$env:WT_FONTWEIGHT) `
+            -Acrylic ([string]$env:WT_ACRYLIC)
         if ($env:WT_STATUS_FILE) {
             [System.IO.File]::WriteAllText($env:WT_STATUS_FILE, 'OK', (New-Object System.Text.UTF8Encoding($false)))
         }
@@ -2050,6 +2077,13 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
         '灰度柔和' { $env:WT_AA = 'grayscale' } '清晰锐利' { $env:WT_AA = 'cleartype' } '像素风' { $env:WT_AA = 'aliased' }
     }
 
+    Write-Host '  亚克力磨砂 1) 开（磨砂玻璃，看不清桌面） 2) 关（真透明，看得到桌面）  (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
+    switch ($v.Trim()) {
+        '1' { $env:WT_ACRYLIC = 'on' } '2' { $env:WT_ACRYLIC = 'off' }
+        '开' { $env:WT_ACRYLIC = 'on' } '关' { $env:WT_ACRYLIC = 'off' }
+    }
+
     Write-Host '  字重 1) 常规 2) 粗体   (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
     $v = [Console]::In.ReadLine(); if ($null -eq $v) { $v = '' }
     switch ($v.Trim()) {
@@ -2095,7 +2129,8 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
     Write-Host ("  高级外观: 行高=" + $(if ($env:WT_CELLHEIGHT) { $env:WT_CELLHEIGHT } else { '保持' }) +
                 "  抗锯齿=" + $(if ($env:WT_AA) { $aaText[$env:WT_AA] } else { '保持' }) +
                 "  颜色修正=" + $(if ($env:WT_ADJUST) { $adjText[$env:WT_ADJUST] } else { '保持' }) +
-                "  字重=" + $(if ($env:WT_FONTWEIGHT) { if ($env:WT_FONTWEIGHT -eq 'bold') { '粗体' } else { '常规' } } else { '保持' })) -ForegroundColor Cyan
+                "  字重=" + $(if ($env:WT_FONTWEIGHT) { if ($env:WT_FONTWEIGHT -eq 'bold') { '粗体' } else { '常规' } } else { '保持' }) +
+                "  亚克力=" + $(if ($env:WT_ACRYLIC) { if ($env:WT_ACRYLIC -eq 'off') { '关（真透明）' } else { '开' } } else { '保持' })) -ForegroundColor Cyan
     if ($env:WT_BGALIGN -or $env:WT_BGOPACITY -or $env:WT_BGSTRETCH) {
         Write-Host ("  背景图  : 对齐=" + $(if ($env:WT_BGALIGN) { $alignText[$env:WT_BGALIGN] } else { '保持' }) +
                     "  浓淡=" + $(if ($env:WT_BGOPACITY) { $env:WT_BGOPACITY } else { '保持' }) +

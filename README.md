@@ -66,6 +66,7 @@ CLBT -bg-stretch uniform               拉伸：uniformToFill/fill/uniform/none
 CLBT -font "D:\fonts\my.ttf"           安装并使用指定字体（文件或目录）
 CLBT -face "0xProto Nerd Font Mono"     直接用已安装的字族（不用传文件路径）
 CLBT -font-weight bold                 字重：常规 normal / 粗体 bold
+CLBT -acrylic off                      关掉亚克力磨砂（这样才是真透明，能看到桌面）
 CLBT -install-fonts                    只安装内置的 10 个字体，不改任何设置
 CLBT -cell-height 1.2                  行高 0.8–2.0
 CLBT -antialiasing grayscale           抗锯齿：grayscale/cleartype/aliased
@@ -156,6 +157,12 @@ v1.0.2 已修复。旧版本文档区里有中文注释，在 `chcp 65001` 的�
 
 **设置了背景图但 PowerShell 标签看不到？**
 多半是单个配置文件里写了 `backgroundImage: null` 覆盖了全局默认。工具现在会自动清除这类覆盖。
+
+**调了透明度却看不出变化？**
+两种可能：①**亚克力磨砂**开着——它给窗口加了一层磨砂材质，透明度只影响磨砂层的浓淡，
+看起来就像"没反应"。想要真透明：图形界面里取消勾选「亚克力磨砂」，或命令行 `CLBT -acrylic off`。
+②桌面/壁纸本身很暗，透出来还是黑的——换张亮一点的壁纸再试。
+改完记得点「应用外观」，并新开一个终端标签页。
 
 **背景图让透明感消失？**
 图片和窗口透明度是两个独立图层，叠加后 ≈ `窗口 + 图片×(1-窗口)`。用 `-bg-opacity` 调低图片浓淡即可。

@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -152,6 +152,7 @@ def build_apply_args(st):
             "-transparent", str(int(st["transparent"]))]
 
     if st["style"] == "linux":
+        args += ["-acrylic", "on" if st["acrylic"] else "off"]
         if st["font_mode"] == "file" and st["font_file"]:
             args += ["-font", st["font_file"]]
         elif st["face"]:
@@ -361,6 +362,8 @@ class App:
         tk.Frame(b, bg=LINE, height=1).pack(fill="x", pady=5)
         self._chk(b, "cmd 标签 UTF-8 启动（修 bat 乱码）", self.var_enc, self._on_enc).pack(fill="x")
         self._chk(b, "自适应前景色（按背景明暗切深浅）", self.var_adapt, self._on_adapt).pack(fill="x")
+        self.var_acrylic = tk.BooleanVar(value=True)
+        self._chk(b, "亚克力磨砂（关掉才是真透明）", self.var_acrylic, self._on_acrylic).pack(fill="x")
 
         c, b = self._card(left, "透明度 / 不透明度")
         c.pack(fill="x", pady=(0, 8))
@@ -521,6 +524,8 @@ class App:
             self.var_aa.set(label_of(AA_CHOICES, cur["aa"]))
         if cur.get("adjust"):
             self.var_adjust.set(label_of(ADJUST_CHOICES, cur["adjust"]))
+        if cur.get("acrylic") is not None:
+            self.var_acrylic.set(bool(cur["acrylic"]))
         self._on_transp()
         self._on_bgop()
         self._on_bg_toggle()
@@ -546,10 +551,16 @@ class App:
         self.lbl_cur.configure(text="\n".join(f"{k}\t{v}" for k, v in rows))
 
     # ---------------- 回调
+    def _transp_text(self):
+        t = int(float(self.var_transp.get()))
+        return f"透明度 {t}%  →  不透明度 {100 - t}%"
+
     def _on_transp(self):
         t = int(float(self.scale_transp.get()))
         self.var_transp.set(t)
-        self.lbl_transp.configure(text=f"透明度 {t}%  →  不透明度 {100 - t}%")
+        txt = f"透明度 {t}%  →  不透明度 {100 - t}%"
+        txt += "    亚克力：磨砂玻璃" if self.var_acrylic.get() else "    亚克力：关（真透明）"
+        self.lbl_transp.configure(text=txt)
 
     def _on_bgop(self):
         v = float(self.scale_bgop.get())
@@ -561,6 +572,11 @@ class App:
         st = "normal" if on else "disabled"
         self.entry_bg.configure(state=st, bg=CARD2 if on else "#101010", fg=FG if on else DIM)
         self.scale_bgop.configure(state=st)
+
+    def _on_acrylic(self):
+        on = bool(self.var_acrylic.get())
+        self.lbl_transp.configure(
+            text=self._transp_text() + ("    亚克力：磨砂玻璃" if on else "    亚克力：关（真透明）"))
 
     def _on_style(self):
         linux = self.var_style.get() == "linux"
@@ -588,6 +604,7 @@ class App:
         return {
             "style": self.var_style.get(),
             "transparent": int(self.var_transp.get()),
+            "acrylic": bool(self.var_acrylic.get()),
             "bg_enabled": bool(self.var_bg_on.get()),
             "bg_path": self.var_bg.get().strip(),
             "bg_opacity": float(self.var_bg_op.get()),
@@ -749,7 +766,8 @@ def selftest():
     print(f"installer = {find_installer()}")
     cur = read_current_settings()
     print(f"settings  = {cur.get('path') if cur else '未找到'}")
-    base = {"style": "linux", "transparent": 64, "bg_enabled": False, "bg_path": "",
+    base = {"style": "linux", "transparent": 64, "acrylic": True,
+            "bg_enabled": False, "bg_path": "",
             "bg_opacity": 0.22, "bg_align": "center", "bg_stretch": "uniformToFill",
             "font_mode": "face", "face": "0xProto Mono Italic", "weight": "normal", "font_file": "",
             "cell_height": "", "aa": "", "adjust": ""}
