@@ -153,6 +153,14 @@ install.exe --uninstall  :: 彻底卸载命令本身（清 PATH + 删 C:\Program
 v1.0.2 已修复。旧版本文档区里有中文注释，在 `chcp 65001` 的控制台里 cmd 会算错行偏移、
 把注释片段当命令执行。升级到 v1.0.2 即可，不需要改任何设置。
 
+**它会改我的 PowerShell 执行策略吗？**
+不会。执行策略是 Restricted/AllSigned 时，工具只提示你自己要跑的命令
+（Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned），不会替你改。
+
+**它会不会覆盖我自己配的字体 / 内边距？**
+第一次改动前会把你原有的 ont / padding / scrollbarState 存一份快照
+（%LOCALAPPDATA%\WindowsCommandLineBeautify\defaults-snapshot.json），CLBT -uninstall 时还原。
+
 **运行 .bat 中文乱码？**
 不是字体问题，是**代码页**。cmd 默认 936(GBK)，UTF-8 编码的 bat 就会乱。安装器已经自动把 cmd 标签改成 UTF-8 启动；反之 GBK 编码的老 bat 会乱，用记事本另存为 UTF-8 即可。
 
