@@ -84,6 +84,24 @@ CLBT -help                             显示帮助
 
 **不指定 `-linux` / `-win` 时会沿用当前风格**——只调透明度不会把风格改掉。
 
+## 动态壁纸（GIF 背景）
+
+Windows Terminal 自己就会按 GIF 的帧时长循环播放背景图，所以「动态壁纸」= 直接把 `.gif` 交给它：
+
+```bat
+CLBT -background "D:\pics\cat.gif"                    :: 动态壁纸
+CLBT -background "D:\pics\cat.gif" -bg-opacity 0.7    :: 再压一点浓淡
+CLBT -background off                                    :: 去掉
+```
+
+图形界面里点「浏览」选 `.gif` 即可，提示行会变成绿色的「动态壁纸：.gif 会按原帧率循环播放」。
+
+两个注意点：
+
+- **GIF 不会被缩放**：动图缩放必须逐帧重新编码，实际会退化成一张静态 PNG，
+  所以工具对动图跳过"超大图自动缩小"这一步（>8MB 会提示你先压缩，播放时 CPU 偏高）
+- 动态壁纸不额外起进程，是 Terminal 自己渲染；帧率由 GIF 文件本身决定
+
 ## 交互菜单
 
 ```

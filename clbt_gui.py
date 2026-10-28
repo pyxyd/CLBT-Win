@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.13"
+VERSION = "1.0.14"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -582,13 +582,19 @@ class App:
         self.lbl_bgop.configure(text=f"{v:.2f}")
 
     def _bg_hint(self):
+        path = (self.var_bg.get() or "").strip().lower()
+        animated = path.endswith(".gif")
         if getattr(self, "bg_missing", False) and self.var_bg_on.get():
             self.lbl_bg_hint.configure(
                 text="⚠ settings.json 里的背景图文件已不存在；取消勾选「启用」才能移除它",
                 fg=YELLOW)
+        elif animated and self.var_bg_on.get():
+            self.lbl_bg_hint.configure(
+                text="动态壁纸：.gif 会按原帧率循环播放（Terminal 自己播，不额外占进程）",
+                fg=GREEN)
         else:
             self.lbl_bg_hint.configure(
-                text="图片放在这个路径（会被复制到 %LOCALAPPDATA%\\WindowsCommandLineBeautify）",
+                text="支持 PNG / JPG / GIF（动图会动）/ BMP；图片会被复制到 %LOCALAPPDATA%\\WindowsCommandLineBeautify",
                 fg=DIM)
 
     def _on_bg_toggle(self):

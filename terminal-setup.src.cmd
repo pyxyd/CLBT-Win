@@ -673,13 +673,39 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
             $bgDir = Join-Path $env:LOCALAPPDATA 'WindowsCommandLineBeautify'
             if ($env:WT_ADAPTIVE_DIR) { $bgDir = $env:WT_ADAPTIVE_DIR }
             if (-not (Test-Path -LiteralPath $bgDir)) { New-Item -ItemType Directory -Path $bgDir -Force | Out-Null }
-            # 超大图先缩到 1920 宽：几万像素的图会让 Terminal 解码吃掉几百 MB 内存，甚至直接不渲染
+            # ---- 动态壁纸：GIF 动图 ----
+            # Terminal 会按 GIF 自己的帧时长播放，所以这类文件绝不能缩放：
+            # 缩放要逐帧重新编码，实际会退化成一张静态 PNG（老版本就是这样悄悄把动画吃掉的）
             $bgSource = $Background
             $bgTemp = $null
+            $isAnimated = $false
+            $frames = 1
             try {
                 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+                $imgProbe = [System.Drawing.Image]::FromFile($Background)
+                try {
+                    foreach ($fd in $imgProbe.FrameDimensionsList) {
+                        $dim = New-Object System.Drawing.Imaging.FrameDimension $fd
+                        $fc = $imgProbe.GetFrameCount($dim)
+                        if ($fc -gt 1) { $isAnimated = $true; $frames = $fc; break }
+                    }
+                }
+                finally { $imgProbe.Dispose() }
+            }
+            catch { }
+
+            $fileMB = (Get-Item -LiteralPath $Background).Length / 1MB
+            if ($isAnimated) {
+                Good ("动态壁纸：GIF 共 " + $frames + " 帧，Terminal 会自动播放")
+                if ($fileMB -gt 8) {
+                    Warn ("这张 GIF 有 " + [math]::Round($fileMB, 1) + " MB：为保证动画不丢，本次不做缩放；" +
+                          "播放时 CPU 可能偏高，建议先压缩或降低尺寸")
+                }
+            }
+            else {
+            # 超大静态图先缩到 1920 宽：几万像素的图会让 Terminal 解码吃掉几百 MB 内存，甚至直接不渲染
+            try {
                 $srcImg = [System.Drawing.Image]::FromFile($Background)
-                $fileMB = (Get-Item -LiteralPath $Background).Length / 1MB
                 if ($srcImg.Width -gt 3840 -or $fileMB -gt 8) {
                     $scale = [Math]::Min(1.0, 1920 / $srcImg.Width)
                     $nw = [int]($srcImg.Width * $scale)
@@ -701,6 +727,7 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
                 else { $srcImg.Dispose() }
             }
             catch { if ($bgTemp -and (Test-Path $bgTemp)) { Remove-Item $bgTemp -Force -ErrorAction SilentlyContinue } }
+            }
 
             # 用内容哈希命名：同一张图重跑不会「源=目标」，换图也不会覆盖 Terminal 正打开的文件
             $bgHash = (Get-FileHash -LiteralPath $bgSource -Algorithm SHA256).Hash.Substring(0, 8).ToLower()
@@ -1675,7 +1702,8 @@ function Show-CliHelp {
     Write-Host '    CLBT -win                     Windows 原生：默认配色、不透明、默认提示符' -ForegroundColor Gray
     Write-Host '    CLBT -transparent <0-100>     设置透明度（0=不透明，100=全透；两种风格都生效）' -ForegroundColor Gray
     Write-Host '    CLBT -opacity <0-100>         直接设置不透明度（100=完全不透明，同 Terminal 的 opacity）' -ForegroundColor Gray
-    Write-Host '    CLBT -background "<图片路径>"  设置背景图片（png/jpg/jpeg/gif/bmp，可与透明度叠加）' -ForegroundColor Gray
+    Write-Host '    CLBT -background "<图片路径>"  背景图片（png/jpg/jpeg/gif/bmp；GIF 动图会动）' -ForegroundColor Gray
+    Write-Host '                                 动态壁纸：直接给一个 .gif，Terminal 会按原帧率播放' -ForegroundColor DarkGray
     Write-Host '    CLBT -background off          移除背景图片' -ForegroundColor Gray
     Write-Host '    CLBT -bg-align <对齐>         背景图对齐: 居中 center / 顶部 top / 底部 bottom / 左侧 left / 右侧 right' -ForegroundColor Gray
     Write-Host '                                 另有 左上 topLeft / 右上 topRight / 左下 bottomLeft / 右下 bottomRight' -ForegroundColor DarkGray
@@ -2345,7 +2373,7 @@ Write-Host ('  cmd 提示符: ' + $(if ($cmdOn) { '一并设为仿 Linux（AutoR
 Write-Host ''
 
 # ---- 背景图片（对应 -background "<图片路径>"）----
-Write-Host '是否设置背景图片（png/jpg/jpeg/gif/bmp，可与透明度叠加）？' -ForegroundColor White
+Write-Host '是否设置背景图片（png/jpg/jpeg/gif/bmp；给 .gif 就是动态壁纸）？' -ForegroundColor White
 Write-Host '  直接回车跳过；输入 off 移除已有背景图；或粘贴图片完整路径' -ForegroundColor Gray
 Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
 $ansBg = Read-Answer
