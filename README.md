@@ -179,6 +179,11 @@ v1.0.2 已修复。旧版本文档区里有中文注释，在 `chcp 65001` 的�
 第一次改动前会把你原有的 ont / padding / scrollbarState 存一份快照
 （%LOCALAPPDATA%\WindowsCommandLineBeautify\defaults-snapshot.json），CLBT -uninstall 时还原。
 
+**在界面里改完没反应？**
+改完要点右下角那个亮绿色的 **「💾 保存设置」** 才会写进终端；
+只要还有改动没保存，按钮会变黄并在旁边提示 `● 有未保存的改动`，窗口标题也会带 `*`。
+保存后**新开一个标签页**才看得到效果。
+
 **运行 .bat 中文乱码？**
 不是字体问题，是**代码页**。cmd 默认 936(GBK)，UTF-8 编码的 bat 就会乱。安装器已经自动把 cmd 标签改成 UTF-8 启动；反之 GBK 编码的老 bat 会乱，用记事本另存为 UTF-8 即可。
 

@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.14"
+VERSION = "1.0.15"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -230,6 +230,8 @@ class App:
         self.q = queue.Queue()
         self.busy = False
         self.action_buttons = []
+        self.dirty = False        # 有未保存的改动？
+        self._loading = True      # 预填期间不要标脏
 
         root.title(f"{APP_TITLE}  v{VERSION}")
         root.configure(bg=BG)
@@ -251,6 +253,7 @@ class App:
         h = max(int(800 * self.dpi), self.root.winfo_reqheight() + 10)
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         self.root.geometry(f"{min(w, sw - 40)}x{min(h, sh - 80)}")
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(60, self._drain)
         self.root.after(120, self._dark_titlebar)
         if not self.tool:
@@ -305,11 +308,15 @@ class App:
         return b
 
     def _slider(self, parent, lo, hi, init, res=1, length=180, cb=None):
-        return tk.Scale(parent, from_=lo, to=hi, resolution=res, orient="horizontal",
-                        length=length, bg=CARD, fg=FG, troughcolor="#262626",
-                        highlightthickness=0, bd=0, sliderrelief="flat",
-                        activebackground=GREEN, font=MONO_S, showvalue=False,
-                        command=cb or (lambda v: None))
+        s = tk.Scale(parent, from_=lo, to=hi, resolution=res, orient="horizontal",
+                     length=length, bg=CARD, fg=FG, troughcolor="#262626",
+                     highlightthickness=0, bd=0, sliderrelief="flat",
+                     activebackground=GREEN, font=MONO_S, showvalue=False,
+                     command=cb or (lambda v: None))
+        # 必须显式设初值：tk.Scale 不认构造参数里的"初值"，默认停在 from_ 那一端，
+        # 结果浓淡会变成 0.05（图几乎透明）、透明度会变成 0（窗口不透明）
+        s.set(init)
+        return s
 
     def _chk(self, parent, text, var, cmd=None):
         return tk.Checkbutton(parent, text=text, variable=var, bg=CARD, fg=FG, selectcolor=CARD,
@@ -375,7 +382,7 @@ class App:
         self.scale_transp.pack(fill="x", pady=(4, 2))
         tk.Label(b, text="0 = 完全不透明 · 100 = 全透（等同 CLBT -transparent 的数值）",
                  bg=CARD, fg=DIM, font=MONO_S, anchor="w").pack(fill="x")
-        tk.Label(b, text="改的是 Windows Terminal 窗口，不是这个界面；点「应用外观」后新开标签页看效果",
+        tk.Label(b, text="改的是 Windows Terminal 窗口，不是这个界面；改完点左下角「保存设置」才生效",
                  bg=CARD, fg="#E5C07B", font=MONO_S, anchor="w", wraplength=430,
                  justify="left").pack(fill="x")
 
@@ -485,12 +492,21 @@ class App:
             self.log_text.tag_configure(tag, foreground=color)
         self.log_text.configure(state="disabled")
 
-        # ---- 底部按钮
+        # ---- 底部按钮：保存做成整条最扎眼的那一个
         acts = tk.Frame(root, bg=BG)
         acts.grid(row=2, column=0, sticky="ew", padx=14, pady=(10, 12))
-        b_apply = self._btn(acts, "应用外观", self._apply, bg="#1E3A2C", fg=GREEN, padx=16, pady=7)
-        b_apply.pack(side="left")
-        self.action_buttons.append(b_apply)
+
+        self.btn_apply = tk.Button(
+            acts, text="💾  保存设置", command=self._apply,
+            bg=GREEN, fg="#06210F", activebackground="#6BF2A8", activeforeground="#06210F",
+            font=("Microsoft YaHei UI", 11, "bold"), relief="flat", bd=0,
+            padx=22, pady=9, cursor="hand2")
+        self.btn_apply.pack(side="left")
+        self.action_buttons.append(self.btn_apply)
+
+        self.lbl_dirty = tk.Label(acts, text="", bg=BG, fg=YELLOW,
+                                  font=("Microsoft YaHei UI", 10, "bold"))
+        self.lbl_dirty.pack(side="left", padx=(14, 0))
         for txt, fn in (("恢复 Windows 原生", self._to_win),
                         ("撤回外观修改", self._uninstall),
                         ("移除 cmd 提示符", self._undo_cmd),
@@ -501,6 +517,52 @@ class App:
         diag = self._btn(acts, "环境诊断", self._diagnose, bg=CARD, fg=CYAN)
         diag.pack(side="right", padx=(0, 8))
         self._btn(acts, "清空日志", self._clear_log, bg=CARD, fg=DIM).pack(side="right")
+
+        # 任何控件一改就提示「有未保存的改动」
+        for var in (self.var_style, self.var_transp, self.var_enc, self.var_adapt,
+                    self.var_acrylic, self.var_face, self.var_weight, self.var_font_file,
+                    self.var_cellh, self.var_aa, self.var_adjust, self.var_bg_on,
+                    self.var_bg, self.var_bg_op, self.var_align, self.var_stretch):
+            try:
+                var.trace_add("write", self._mark_dirty)
+            except Exception:
+                pass
+
+    # ---------------- 未保存状态
+    def _mark_dirty(self, *_args):
+        if getattr(self, "_loading", False):
+            return
+        if self.dirty:
+            return
+        self.dirty = True
+        self._refresh_dirty_ui()
+
+    def _mark_clean(self, flash=False):
+        self.dirty = False
+        self._refresh_dirty_ui()
+        if flash:
+            self.lbl_dirty.configure(text="✓ 已保存", fg=GREEN)
+            self.root.after(3000, lambda: self.lbl_dirty.configure(text="") if not self.dirty else None)
+
+    def _refresh_dirty_ui(self):
+        try:
+            if self.dirty:
+                self.lbl_dirty.configure(text='● 有未保存的改动 —— 点左边「保存设置」', fg=YELLOW)
+                self.root.title(f"{APP_TITLE}  v{VERSION}  *")
+                self.btn_apply.configure(bg="#FFC857", fg="#3A2A00")
+            else:
+                self.lbl_dirty.configure(text="")
+                self.root.title(f"{APP_TITLE}  v{VERSION}")
+                self.btn_apply.configure(bg=GREEN, fg="#06210F")
+        except Exception:
+            pass
+
+    def _on_close(self):
+        if getattr(self, "dirty", False):
+            if not messagebox.askyesno(APP_TITLE,
+                                       "有未保存的改动。\n\n点「保存设置」才会写进终端；现在退出会丢掉这些改动。\n仍然退出吗？"):
+                return
+        self.root.destroy()
 
     # ---------------- 预填 / 状态
     def _load_defaults(self):
@@ -543,6 +605,8 @@ class App:
         self._on_bgop()
         self._on_bg_toggle()
         self._bg_hint()
+        self._loading = False
+        self._mark_clean()
 
     def _refresh_status(self):
         cur = read_current_settings()
@@ -657,12 +721,13 @@ class App:
         for b in self.action_buttons:
             b.configure(state=state)
 
-    def _run(self, args, title):
+    def _run(self, args, title, clears_dirty=False):
         if self.busy:
             return
         if not self.tool:
             messagebox.showerror(APP_TITLE, "找不到 terminal-setup.cmd，请先运行 install.exe。")
             return
+        self._pending_clears_dirty = clears_dirty
         self._set_busy(True)
         self.log("", None)
         self.log(f"$ CLBT {' '.join(args)}", "cmd")
@@ -684,6 +749,8 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def _drain(self):
+        if not self.root.winfo_exists():
+            return
         try:
             while True:
                 kind, payload = self.q.get_nowait()
@@ -693,6 +760,8 @@ class App:
                 else:
                     self._set_busy(False)
                     self._refresh_status()
+                    if payload == 0 and getattr(self, "_pending_clears_dirty", False):
+                        self._mark_clean(flash=True)
                     self.log("  ✔ 完成，新开一个终端标签页生效" if payload == 0
                              else f"  ✘ 退出码 {payload}", "ok" if payload == 0 else "err")
         except queue.Empty:
@@ -750,12 +819,12 @@ class App:
             except ValueError:
                 messagebox.showerror(APP_TITLE, "行高需要 0.8 - 2.0 之间的数字；留空表示不设置。")
                 return
-        self._run(build_apply_args(st), "应用外观")
+        self._run(build_apply_args(st), "保存设置", clears_dirty=True)
 
     def _to_win(self):
         self.var_style.set("win")
         self._on_style()
-        self._run(["-win", "-transparent", "0", "/y"], "恢复 Windows 原生")
+        self._run(["-win", "-transparent", "0", "/y"], "恢复 Windows 原生", clears_dirty=True)
 
     def _uninstall(self):
         if not messagebox.askyesno(APP_TITLE, "撤回本工具对外观 / 提示符 / cmd 挂钩的所有修改？\n（字体文件会保留）"):
