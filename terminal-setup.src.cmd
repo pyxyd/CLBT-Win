@@ -38,6 +38,7 @@ set "WT_MODE="
 set "WT_FACE="
 set "WT_FONTWEIGHT="
 set "WT_ACRYLIC="
+set "WT_PREVIEW_OUT="
 set "WT_NOPAUSE="
 set "WT_STYLE="
 set "WT_TRANSPARENT="
@@ -73,6 +74,7 @@ if /i "%~1"=="--font-weight" goto :arg_fontweight
 if /i "%~1"=="--face" goto :arg_face
 if /i "%~1"=="-install-fonts" goto :arg_ifonts
 if /i "%~1"=="-gui" goto :arg_gui
+if /i "%~1"=="-preview" goto :arg_preview
 if /i "%~1"=="-diagnose" goto :arg_diag
 if /i "%~1"=="-doctor" goto :arg_diag
 if /i "%~1"=="--install-fonts" goto :arg_ifonts
@@ -156,6 +158,14 @@ goto :parse
 :arg_ifonts
 set "WT_MODE=installfonts"
 goto :launch
+
+:arg_preview
+rem  preview: do NOT set WT_MODE here (later args like -linux would set it to cli);
+rem  only remember the output path and decide at :launch
+set "WT_PREVIEW_OUT=%~2"
+shift
+shift
+goto :parse
 
 :arg_diag
 set "WT_MODE=diag"
@@ -266,6 +276,7 @@ set "WT_MODE=undo"
 goto :launch
 
 :launch
+if defined WT_PREVIEW_OUT set "WT_MODE=preview"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw=[System.IO.File]::ReadAllText($env:WT_SELF,[System.Text.Encoding]::UTF8); $i=$raw.LastIndexOf('#::PS1::'); if($i -lt 0){ Write-Host 'ERROR: payload marker not found' -ForegroundColor Red; exit 1 }; $f=$raw.IndexOf('#::FONTS::',$i); if($f -lt 0){ $code=$raw.Substring($i+8) } else { $code=$raw.Substring($i+8,$f-($i+8)) }; $tmp=Join-Path $env:TEMP ('wtsetup_'+[guid]::NewGuid().ToString('N')+'.ps1'); [System.IO.File]::WriteAllText($tmp,$code,(New-Object System.Text.UTF8Encoding($true))); try { & $tmp } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }; if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE } else { exit 0 }"
 set "WT_RC=%ERRORLEVEL%"
 
@@ -296,6 +307,7 @@ exit /b 0
 # =====================================================================
 
 $ErrorActionPreference = 'Stop'
+$__tStart = Get-Date
 
 # 标题：先记下原值再改，退出时还原（批处理区不设标题，避免退出后残留）
 $__oldTitle = $null
@@ -472,6 +484,267 @@ function Install-FontFile([string]$Path) {
     }
     Write-Host ("  字体安装：新增 " + $installed + " 个，已存在 " + $skipped + " 个") -ForegroundColor Gray
     return $firstFamily
+}
+
+
+# =====================================================================
+# 预览渲染：把当前参数合成成一张"模拟终端"图（供图形界面显示，不写 settings.json）
+#   · 桌面底优先用系统壁纸，取不到就画渐变
+#   · 亚克力：先缩-再放大的近似模糊 + 一层压暗
+#   · 窗口不透明度：终端底色按 alpha 叠在桌面/图片上
+#   · 背景图：按 bg-opacity 做 alpha，按 bg-align/bg-stretch 决定铺法
+#   · 文字：用所选字族（没装就回落 Consolas），行高按 cell-height 放大
+# =====================================================================
+function Get-CoverRect([int]$iw, [int]$ih, [int]$w, [int]$h, [string]$stretch) {
+    # 返回 @{X;Y;W;H} 目标矩形
+    $st = if ($stretch) { $stretch } else { 'uniformToFill' }
+    if ($st -eq 'fill') { return @{ X = 0; Y = 0; W = $w; H = $h } }
+    if ($st -eq 'none') {
+        $x = [int](($w - $iw) / 2); $y = [int](($h - $ih) / 2)
+        return @{ X = $x; Y = $y; W = $iw; H = $ih }
+    }
+    $scale = if ($st -eq 'uniform') { [Math]::Min($w / $iw, $h / $ih) } else { [Math]::Max($w / $iw, $h / $ih) }
+    $dw = [int]($iw * $scale); $dh = [int]($ih * $scale)
+    return @{ X = [int](($w - $dw) / 2); Y = [int](($h - $dh) / 2); W = $dw; H = $dh }
+}
+
+function Render-Preview([string]$OutPath) {
+    if (-not $OutPath) { throw '缺少输出路径：CLBT -preview "<out.png>"' }
+    $__p = Get-Date
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    if ($env:WT_PREVIEW_TIMING) { Write-Host ("  [timing]   Add-Type: " + [int]((Get-Date) - $__p).TotalMilliseconds + " ms") -ForegroundColor DarkGray; $__p = Get-Date }
+
+    $W = 720
+    # GUI 可以按卡片宽度指定：WT_PREVIEW_W=520
+    if ($env:WT_PREVIEW_W -and $env:WT_PREVIEW_W -match '^\d+$') { $W = [int]$env:WT_PREVIEW_W }
+    if ($W -lt 240) { $W = 240 }
+    if ($W -gt 1440) { $W = 1440 }
+    # 默认 16:9；图形界面会按预览卡的实际宽高传 WT_PREVIEW_H，这样图能铺满卡片，
+    # 比例也更像真实的终端窗口（又宽又扁）
+    $H = [int]($W * 9 / 16)
+    if ($env:WT_PREVIEW_H -and $env:WT_PREVIEW_H -match '^\d+$') { $H = [int]$env:WT_PREVIEW_H }
+    if ($H -lt 160) { $H = 160 }
+    if ($H -gt 1440) { $H = 1440 }
+    $bmp = New-Object System.Drawing.Bitmap $W, $H
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+    # ---- 参数（和真实应用保持同一套语义）
+    $style = if ($env:WT_STYLE) { $env:WT_STYLE.Trim().ToLower() } else { 'linux' }
+    $opacity = if ($style -eq 'win') { 100 } else { 36 }
+    if ($env:WT_OPACITY -and $env:WT_OPACITY -match '^\d+$') { $opacity = [int]$env:WT_OPACITY }
+    elseif ($env:WT_TRANSPARENT -and $env:WT_TRANSPARENT -match '^\d+$') { $opacity = 100 - [int]$env:WT_TRANSPARENT }
+    $acrylic = $true
+    if ($env:WT_ACRYLIC) { $acrylic = ($env:WT_ACRYLIC.Trim().ToLower() -in @('on', 'true', '1', '开')) }
+    if ($style -eq 'win' -and -not $env:WT_ACRYLIC) { $acrylic = $false }
+    $face = if ($env:WT_FACE) { $env:WT_FACE } elseif ($style -eq 'win') { 'Consolas' } else { '0xProto Mono Italic' }
+    $bold = ($env:WT_FONTWEIGHT -and $env:WT_FONTWEIGHT.Trim().ToLower() -in @('bold', '粗体'))
+    $cellH = 1.0
+    if ($env:WT_CELLHEIGHT) { $tmp = 0.0; if ([double]::TryParse($env:WT_CELLHEIGHT, [ref]$tmp) -and $tmp -ge 0.8 -and $tmp -le 2.0) { $cellH = $tmp } }
+
+    # 配色：linux = Tango；win = Campbell
+    if ($style -eq 'win') {
+        $bgColor = [System.Drawing.Color]::FromArgb(255, 12, 12, 12)
+        $fgColor = [System.Drawing.Color]::FromArgb(255, 204, 204, 204)
+        $green = $fgColor; $blue = $fgColor; $cyan = $fgColor; $yellow = $fgColor; $red = $fgColor
+        $dim = [System.Drawing.Color]::FromArgb(255, 118, 118, 118)
+    }
+    else {
+        $bgColor = [System.Drawing.Color]::FromArgb(255, 0, 0, 0)
+        $fgColor = [System.Drawing.Color]::FromArgb(255, 211, 215, 207)
+        $green = [System.Drawing.Color]::FromArgb(255, 138, 226, 52)
+        $blue = [System.Drawing.Color]::FromArgb(255, 114, 159, 207)
+        $cyan = [System.Drawing.Color]::FromArgb(255, 52, 226, 226)
+        $yellow = [System.Drawing.Color]::FromArgb(255, 252, 233, 79)
+        $red = [System.Drawing.Color]::FromArgb(255, 239, 41, 41)
+        $dim = [System.Drawing.Color]::FromArgb(255, 85, 87, 83)
+    }
+
+    # ---- 1) 桌面底（系统壁纸 > 渐变）
+    #   壁纸可能是上百 MB 的图（本机那张就 146MB），解码一次两秒多；
+    #   超过 12MB 就直接用渐变——预览只是看透明/磨砂/背景图/字体的观感，不需要真壁纸
+    $drawn = $false
+    if (-not $env:WT_PREVIEW_NOWALL) {
+        try {
+            $wp = (Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name WallPaper -ErrorAction Stop).WallPaper
+            if ($wp -and (Test-Path -LiteralPath $wp)) {
+                $wi = Get-Item -LiteralPath $wp -ErrorAction SilentlyContinue
+                if ($wi -and $wi.Length -le 12MB) {
+                    $wall = [System.Drawing.Image]::FromFile($wp)
+                    $rct = Get-CoverRect $wall.Width $wall.Height $W $H 'uniformToFill'
+                    $g.DrawImage($wall, (New-Object System.Drawing.Rectangle $rct.X, $rct.Y, $rct.W, $rct.H))
+                    $wall.Dispose(); $drawn = $true
+                }
+            }
+        }
+        catch { }
+    }
+    if (-not $drawn) {
+        # 桌面上没有可用的壁纸（或者壁纸太大、不划算解码）：画一张"典型桌面"——
+        # 深蓝紫渐变 + 三团柔光 + 几道细线。纯色渐变的话，36% 和 15% 只差几个灰阶，
+        # 预览里根本看不出透明度和亚克力模糊的区别。
+        $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+            (New-Object System.Drawing.Point 0, 0), (New-Object System.Drawing.Point $W, $H),
+            [System.Drawing.Color]::FromArgb(255, 46, 58, 104), [System.Drawing.Color]::FromArgb(255, 16, 14, 30))
+        $g.FillRectangle($brush, 0, 0, $W, $H); $brush.Dispose()
+
+        $blobs = @(
+            @{ X = 0.20; Y = 0.26; R = 0.34; C = [System.Drawing.Color]::FromArgb(200, 82, 142, 235) },
+            @{ X = 0.74; Y = 0.20; R = 0.27; C = [System.Drawing.Color]::FromArgb(190, 154, 96, 226) },
+            @{ X = 0.56; Y = 0.86; R = 0.38; C = [System.Drawing.Color]::FromArgb(175, 44, 190, 178) }
+        )
+        foreach ($bl in $blobs) {
+            $cx = [int]($W * $bl.X); $cy = [int]($H * $bl.Y); $r = [int]($W * $bl.R)
+            $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+            $path.AddEllipse(($cx - $r), ($cy - $r), (2 * $r), (2 * $r))
+            $pgb = New-Object System.Drawing.Drawing2D.PathGradientBrush $path
+            $pgb.CenterPoint = New-Object System.Drawing.PointF $cx, $cy
+            $pgb.CenterColor = $bl.C
+            $sc = New-Object 'System.Drawing.Color[]' $path.PointCount
+            for ($q = 0; $q -lt $path.PointCount; $q++) {
+                $sc[$q] = [System.Drawing.Color]::FromArgb(0, $bl.C.R, $bl.C.G, $bl.C.B)
+            }
+            $pgb.SurroundColors = $sc
+            $g.FillPath($pgb, $path)
+            $pgb.Dispose(); $path.Dispose()
+        }
+        $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(52, 255, 255, 255)), 1
+        for ($k = 1; $k -lt 6; $k++) { $g.DrawLine($pen, 0, [int]($H * $k / 6), $W, [int]($H * $k / 6)) }
+        $pen.Dispose()
+    }
+
+    # ---- 2) 亚克力：缩小再放大当模糊，然后压暗一层
+    if ($acrylic) {
+        $small = New-Object System.Drawing.Bitmap ([int]($W / 12)), ([int]($H / 12))
+        $gs = [System.Drawing.Graphics]::FromImage($small)
+        $gs.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $gs.DrawImage($bmp, 0, 0, $small.Width, $small.Height)
+        $gs.Dispose()
+        $g.DrawImage($small, 0, 0, $W, $H)
+        $small.Dispose()
+        $tint = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(96, 20, 22, 26))
+        $g.FillRectangle($tint, 0, 0, $W, $H); $tint.Dispose()
+    }
+
+    # ---- 3) 终端底色：按窗口不透明度叠加
+    $a = [int](255 * ($opacity / 100.0))
+    if ($a -lt 0) { $a = 0 }
+    if ($a -gt 255) { $a = 255 }
+    $termBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb($a, $bgColor.R, $bgColor.G, $bgColor.B))
+    $g.FillRectangle($termBrush, 0, 0, $W, $H); $termBrush.Dispose()
+
+    # ---- 4) 背景图
+    $bgOpacity = $null
+    if ($env:WT_BGOPACITY) { $tmp = 0.0; if ([double]::TryParse($env:WT_BGOPACITY, [ref]$tmp)) { $bgOpacity = $tmp } }
+    if ($env:WT_BACKGROUND -and $env:WT_BACKGROUND -notin @('off', 'none') -and (Test-Path -LiteralPath $env:WT_BACKGROUND)) {
+        $imgOp = if ($null -ne $bgOpacity) { $bgOpacity } else { 0.55 }
+        try {
+            $img = [System.Drawing.Image]::FromFile($env:WT_BACKGROUND)
+            # 背景图属于"背景层"，整层再按窗口不透明度合成，所以这里要乘上 opacity
+            $effOp = $imgOp * ($opacity / 100.0)
+            $attr = New-Object System.Drawing.Imaging.ImageAttributes
+            $cm = New-Object System.Drawing.Imaging.ColorMatrix
+            $cm.Matrix33 = $effOp
+            $attr.SetColorMatrix($cm)
+            $stretch = if ($env:WT_BGSTRETCH) { $env:WT_BGSTRETCH } else { 'uniformToFill' }
+            $rc = Get-CoverRect $img.Width $img.Height $W $H $stretch
+            $dest = New-Object System.Drawing.Rectangle $rc.X, $rc.Y, $rc.W, $rc.H
+            $g.DrawImage($img, $dest, 0, 0, $img.Width, $img.Height,
+                [System.Drawing.GraphicsUnit]::Pixel, $attr)
+            $img.Dispose()
+        }
+        catch { }
+    }
+
+    if ($env:WT_PREVIEW_TIMING) { Write-Host ("  [timing]   背景合成: " + [int]((Get-Date) - $__p).TotalMilliseconds + " ms") -ForegroundColor DarkGray; $__p = Get-Date }
+    # ---- 5) 文字（模拟终端内容）
+    $px = 15.0
+    $fontStyle = if ($bold) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }
+    $useFamily = $face
+    try { $null = New-Object System.Drawing.FontFamily($useFamily) } catch { $useFamily = 'Consolas' }
+    $font = New-Object System.Drawing.Font $useFamily, $px, $fontStyle, ([System.Drawing.GraphicsUnit]::Pixel)
+    $lineH = [int]($px * 1.45 * $cellH)
+    $fmt = [System.Drawing.StringFormat]::GenericTypographic
+    # GDI+ 量/画的时候会吃掉行尾的空格，prompt 里的 "$ " 得自己补一个空格宽度
+    $spW = [int]($g.MeasureString('a a', $font, [System.Drawing.PointF]::new(0, 0), $fmt).Width -
+                  $g.MeasureString('aa', $font, [System.Drawing.PointF]::new(0, 0), $fmt).Width)
+    if ($spW -lt 2) { $spW = [int]($px * 0.5) }
+    $brushFg = New-Object System.Drawing.SolidBrush $fgColor
+    $brushDim = New-Object System.Drawing.SolidBrush $dim
+    $brushGreen = New-Object System.Drawing.SolidBrush $green
+    $brushBlue = New-Object System.Drawing.SolidBrush $blue
+    $brushCyan = New-Object System.Drawing.SolidBrush $cyan
+    $brushYellow = New-Object System.Drawing.SolidBrush $yellow
+    $brushRed = New-Object System.Drawing.SolidBrush $red
+
+    $x0 = 14
+    $y = 12
+    function Draw-Text2([string]$text, $brush, [int]$x, [int]$y) {
+        $g.DrawString($text, $font, $brush, [single]$x, [single]$y, $fmt)
+    }
+    # 表头
+    Draw-Text2 ('Windows PowerShell') $brushDim $x0 $y
+    $y += $lineH
+    Draw-Text2 ('Copyright (C) Microsoft Corporation. All rights reserved.') $brushDim $x0 $y
+    $y += $lineH * 1.4
+    # 提示符
+    $x = $x0
+    $parts = @(
+        @{ t = 'user@host'; b = $brushGreen },
+        @{ t = ':'; b = $brushDim },
+        @{ t = '~/project'; b = $brushBlue },
+        @{ t = '$'; b = $brushDim; pad = $spW },
+        @{ t = 'ls -la'; b = $brushFg }
+    )
+    foreach ($p in $parts) {
+        Draw-Text2 $p.t $p.b $x $y
+        $sz = $g.MeasureString($p.t, $font, [System.Drawing.PointF]::new(0, 0), $fmt)
+        $x += [int]$sz.Width
+        if ($p.pad) { $x += [int]$p.pad }
+    }
+    $y += $lineH * 1.3
+    function Draw-TwoCol([string]$left, $leftBrush, [string]$right, $rightBrush, [int]$y) {
+        Draw-Text2 $left $leftBrush $x0 $y
+        $wsz = $g.MeasureString($left, $font, [System.Drawing.PointF]::new(0, 0), $fmt)
+        Draw-Text2 $right $rightBrush ($x0 + [int]$wsz.Width + 4) $y
+    }
+    Draw-TwoCol 'drwxr-xr-x  4 user user  4096  ' $brushCyan 'src' $brushBlue $y
+    $y += $lineH
+    Draw-TwoCol '-rw-r--r--  1 user user  1623  ' $brushDim 'README.md' $brushFg $y
+    $y += $lineH
+    Draw-TwoCol '-rwxr-xr-x  1 user user 18342  ' $brushDim 'build.sh' $brushGreen $y
+    $y += $lineH * 1.3
+    # 再一个提示符 + 光标
+    $x = $x0
+    foreach ($p in $parts[0..3]) {
+        Draw-Text2 $p.t $p.b $x $y
+        $sz = $g.MeasureString($p.t, $font, [System.Drawing.PointF]::new(0, 0), $fmt)
+        $x += [int]$sz.Width
+    }
+    $x += $spW
+    if ($style -eq 'win') {
+        $bar = New-Object System.Drawing.SolidBrush $fgColor
+        $g.FillRectangle($bar, $x, $y + 2, 2, [int]($px))
+        $bar.Dispose()
+    }
+    else {
+        $cur = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(210, $fgColor.R, $fgColor.G, $fgColor.B))
+        $g.FillRectangle($cur, $x, $y + 1, [int]($px * 0.62), [int]($px * 1.05))
+        $cur.Dispose()
+    }
+
+    foreach ($b in @($brushFg, $brushDim, $brushGreen, $brushBlue, $brushCyan, $brushYellow, $brushRed)) { $b.Dispose() }
+    $font.Dispose()
+    $g.Dispose()
+
+    $dir = Split-Path -Parent $OutPath
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    if ($env:WT_PREVIEW_TIMING) { Write-Host ("  [timing]   文字: " + [int]((Get-Date) - $__p).TotalMilliseconds + " ms") -ForegroundColor DarkGray; $__p = Get-Date }
+    $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    Write-Host ("  预览已生成: " + $OutPath + "  (" + $W + "x" + $H + ")") -ForegroundColor DarkGray
 }
 
 # =====================================================================
@@ -1720,6 +1993,7 @@ function Show-CliHelp {
     Write-Host '    CLBT -install-fonts          只安装内置的 10 个字体，不改任何设置' -ForegroundColor Gray
     Write-Host '    CLBT -gui                    打开图形界面（等同于双击 CLBT-GUI.exe）' -ForegroundColor Gray
     Write-Host '    CLBT -diagnose               环境诊断：设置写到了哪、当前窗口是谁在渲染' -ForegroundColor Gray
+    Write-Host '    CLBT -preview "<输出.png>"     按当前参数渲染一张模拟终端预览图（不写设置）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive                开启自适应前景色（透明时按背景明暗切字体深浅）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive off            关闭自适应前景色' -ForegroundColor Gray
     Write-Host '    CLBT -uninstall               撤回对命令行的修改（外观/提示符/cmd 挂钩还原）' -ForegroundColor Gray
@@ -1906,6 +2180,24 @@ if ($env:WT_MODE -eq 'diag') {
     }
     Write-Host ''
     exit 0
+}
+
+if ($env:WT_MODE -eq 'preview') {
+    try {
+        if ($env:WT_PREVIEW_TIMING) {
+            Write-Host ("  [timing] payload 启动到分支: " + [int]((Get-Date) - $__tStart).TotalMilliseconds + " ms") -ForegroundColor DarkGray
+        }
+        $__tRender = Get-Date
+        Render-Preview ([string]$env:WT_PREVIEW_OUT)
+        if ($env:WT_PREVIEW_TIMING) {
+            Write-Host ("  [timing] Render-Preview: " + [int]((Get-Date) - $__tRender).TotalMilliseconds + " ms") -ForegroundColor DarkGray
+        }
+        exit 0
+    }
+    catch {
+        Write-Host ("预览生成失败: " + $_.Exception.Message) -ForegroundColor Red
+        exit 1
+    }
 }
 
 if ($env:WT_MODE -eq 'installfonts') {

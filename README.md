@@ -77,6 +77,7 @@ CLBT -adaptive off                     关闭
 CLBT -encoding on|off                  让 cmd 标签以 UTF-8 启动（消除 bat 乱码）
 
 CLBT -gui                              打开图形界面（等价双击 CLBT-GUI.exe）
+CLBT -preview "D:\shot.png"            先在 PNG 里看效果，不写任何设置（可叠加其它参数）
 CLBT -diagnose                         环境诊断：设置写到了哪、当前窗口由谁渲染
 CLBT -uninstall                        撤回对命令行的全部修改
 CLBT -help                             显示帮助
@@ -144,6 +145,33 @@ python clbt_gui.py
 - `python clbt_gui.py --selftest` 只打印将要执行的命令，不开窗口
 - 打包 exe 时用 `--manifest gui.manifest`（per-monitor DPI 感知），125% / 150% 缩放下不发虚
 
+### 实时预览
+
+界面右下角有一张预览图：**改哪个控件，图就跟着重画**，还没保存也能先看。
+
+![预览](screenshots/preview.png)
+
+- 透明度、亚克力（磨砂 / 真透明）、字体字形与字重、行高、背景图（含 GIF）、浓淡、
+  对齐、拉伸、风格（仿 Linux / 原生）都会反映进图里
+- 图下面一行写清当前组合和这一张的生成耗时（通常 `0.5–0.8s`）
+- 模拟的终端内容是固定的几行：PowerShell 抬头、一个 bash 提示符、`ls -la` 的几行输出
+- 桌面底图优先用系统壁纸；壁纸大于 12MB 就不解码（本机那张 146MB，解一次 2.6 秒不划算），
+  改画一张"典型桌面"（深蓝紫渐变 + 柔光 + 细横线）——这样透明度和磨砂的区别才看得出来
+- 命令行也能出这张图，不写任何设置：
+
+```bat
+CLBT -preview "D:\shot.png"                                  :: 照着当前设置画一张
+CLBT -preview "D:\shot.png" -linux -transparent 70 -acrylic off
+CLBT -preview "D:\shot.png" -face "0xProto Nerd Font Mono" -font-weight bold
+```
+
+### 为什么预览能快到 0.5 秒
+
+`terminal-setup.cmd` 是 33MB 的单文件（字体都在里面），走 `cmd` 启动时它要逐行读这个
+批处理、每个 `goto` 还要回跳扫描，单次就要 4.5 秒。所以图形界面**不经过 cmd**：直接从
+`.cmd` 里切出那段 121KB 的 PowerShell 载荷，写进临时 `.ps1` 用 `powershell -File` 跑
+（实测 0.49–0.68 秒）。载荷按 `(路径, 修改时间, 大小)` 缓存，切一次就够。
+
 ## 它会修改什么（透明披露）
 
 | 位置 | 内容 | 可撤销 |
@@ -207,6 +235,17 @@ v1.0.2 已修复。旧版本文档区里有中文注释，在 `chcp 65001` 的�
 
 **我换了图，终端没刷新？**
 图片按内容哈希命名，换图会换文件名。若缓存未刷新，重启终端一次。
+
+**界面里的预览图跟真实窗口一模一样吗？**
+尽量贴近，但不是逐像素相等：预览是画出来的示意图（模拟几行终端输出），颜色/透明度/
+磨砂/字体/背景图都按真实规则合成。它**不读** Terminal 的字体渲染细节（抗锯齿、
+字体连字），也不会显示你真实的目录内容——那些只在真窗口里才准。预览的意义是
+"调滑块时立刻看到差别"，最终以保存后的终端为准。
+
+**预览卡一直显示「正在生成预览 . . .」？**
+正常情况 1 秒内出图。超过 5 秒说明起 `powershell` 就被卡住了（多见于杀软实时扫描
+临时 `.ps1`，或 `-ExecutionPolicy` 被组策略锁死）。这时图形界面会自动退回走
+`terminal-setup.cmd -preview`，慢一些但一定能出图；日志区会留下失败原因。
 
 **杀软报毒？**
 未签名 PyInstaller 产物常见误报。可以自行 `python install.py` 运行源码，或按 [README_SIGN.md](README_SIGN.md) 签名。

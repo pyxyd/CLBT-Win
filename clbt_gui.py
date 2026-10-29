@@ -21,12 +21,14 @@ import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.0.15"
+VERSION = "1.1.1"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -84,14 +86,23 @@ def label_of(choices, value):
 
 # --------------------------------------------------------------------- 外部环境
 
+def app_dir():
+    """exe 所在目录。PyInstaller onefile 下 __file__ 指向临时解包目录（_MEIxxxx），
+    必须用 sys.executable，否则永远找不到同目录的 terminal-setup.cmd"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def find_tool():
-    """terminal-setup.cmd：优先 Program Files，其次 PATH 里的 CLBT，最后脚本同级"""
-    cands = [os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+    """terminal-setup.cmd：先看自己所在目录（--dir 装到别处时才对得上），
+    其次 Program Files，最后 PATH 里的 CLBT"""
+    cands = [os.path.join(app_dir(), "terminal-setup.cmd"),
+             os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
                           "CLBT", "terminal-setup.cmd")]
     clbt = shutil.which("CLBT.cmd") or shutil.which("CLBT")
     if clbt:
         cands.append(os.path.join(os.path.dirname(clbt), "terminal-setup.cmd"))
-    cands.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "terminal-setup.cmd"))
     for p in cands:
         if p and os.path.isfile(p):
             return p
@@ -99,7 +110,7 @@ def find_tool():
 
 
 def find_installer():
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = app_dir()
     for p in (os.path.join(here, "install.exe"),
               os.path.join(os.path.expanduser("~"), "Downloads", "install.exe")):
         if os.path.isfile(p):
@@ -175,6 +186,161 @@ def build_apply_args(st):
     if st["adjust"]:
         args += ["-adjust-colors", st["adjust"]]
     return args + ["/y"]
+
+
+# --------------------------------------------------------------------- 预览
+
+PAYLOAD_MARK = "#::PS1::"
+FONTS_MARK = "#::FONTS::"
+_PAYLOAD_CACHE = {}
+# 这些是我们自己传的，预览前先清干净，别把上一次/命令行的残留带进来
+_OUR_ENV = ("WT_MODE", "WT_SELF", "WT_PREVIEW_OUT", "WT_PREVIEW_W", "WT_PREVIEW_NOWALL",
+            "WT_PREVIEW_TIMING", "WT_STYLE", "WT_TRANSPARENT", "WT_OPACITY", "WT_ACRYLIC",
+            "WT_FACE", "WT_FONTWEIGHT", "WT_CELLHEIGHT", "WT_BACKGROUND", "WT_BGOPACITY",
+            "WT_BGSTRETCH", "WT_AA", "WT_ADJUST", "WT_FONTFILE")
+
+
+def powershell_exe():
+    """预览要直接跑内嵌载荷；用系统自带的 powershell 5.1（启动最快）"""
+    for name in ("powershell.exe", "pwsh.exe"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+def extract_payload(tool_path):
+    """从 terminal-setup.cmd 里切出内嵌的 PowerShell 载荷（和 cmd 里的切法一致）"""
+    st = os.stat(tool_path)
+    key = (tool_path, st.st_mtime_ns, st.st_size)
+    if key in _PAYLOAD_CACHE:
+        return _PAYLOAD_CACHE[key]
+
+    def head(limit):
+        with open(tool_path, "rb") as f:
+            return f.read(limit).decode("utf-8", "replace")
+
+    # 载荷紧跟在批处理区（前 ~300 行）后面，先只读开头 2MB，很快
+    raw = head(min(2 * 1024 * 1024, st.st_size))
+    i = raw.rfind(PAYLOAD_MARK)
+    if i < 0:                      # 结构变了就退回整文件
+        raw = head(st.st_size)
+        i = raw.rfind(PAYLOAD_MARK)
+    if i < 0:
+        raise RuntimeError("找不到载荷标记 " + PAYLOAD_MARK)
+    j = raw.find(FONTS_MARK, i)
+    code = raw[i + len(PAYLOAD_MARK):] if j < 0 else raw[i + len(PAYLOAD_MARK):j]
+    if len(code) < 4096 or "Render-Preview" not in code:
+        # 旧版工具里没有预览渲染器，硬跑会掉进交互菜单卡住，直接放弃这条路
+        raise RuntimeError("这个 terminal-setup.cmd 还不支持预览（版本太旧？）")
+    _PAYLOAD_CACHE.clear()
+    _PAYLOAD_CACHE[key] = code
+    return code
+
+
+def ttf_family(path):
+    """从 .ttf/.otf 的 name 表里读出字族名；读不到就返回空串（预览用）"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        if len(data) < 12:
+            return ""
+        num = int.from_bytes(data[4:6], "big")
+        name_off = None
+        for i in range(min(num, 512)):
+            rec = 12 + i * 16
+            if data[rec:rec + 4] == b"name":
+                name_off = int.from_bytes(data[rec + 8:rec + 12], "big")
+                break
+        if name_off is None:
+            return ""
+        count = int.from_bytes(data[name_off + 2:name_off + 4], "big")
+        str_off = name_off + int.from_bytes(data[name_off + 4:name_off + 6], "big")
+        best = ""
+        for i in range(min(count, 512)):
+            r = name_off + 6 + i * 12
+            pid = int.from_bytes(data[r:r + 2], "big")
+            nid = int.from_bytes(data[r + 6:r + 8], "big")
+            length = int.from_bytes(data[r + 8:r + 10], "big")
+            soff = int.from_bytes(data[r + 10:r + 12], "big")
+            if nid not in (1, 16) or length <= 0:
+                continue
+            raw = data[str_off + soff:str_off + soff + length]
+            txt = raw.decode("utf-16-be" if pid in (0, 3) else "latin-1").strip()
+            if not txt:
+                continue
+            if nid == 16 and pid == 3:
+                return txt
+            if not best:
+                best = txt
+        return best
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def preview_env(st, out_path, width=520, height=0):
+    """界面状态 -> 预览用的环境变量（Render-Preview 认的就是这套 WT_*）"""
+    env = dict(os.environ)
+    for k in _OUR_ENV:
+        env.pop(k, None)
+    env["WT_MODE"] = "preview"
+    env["WT_PREVIEW_OUT"] = out_path
+    env["WT_PREVIEW_W"] = str(int(width))
+    if height:
+        env["WT_PREVIEW_H"] = str(int(height))
+    env["WT_STYLE"] = "win" if st["style"] == "win" else "linux"
+    env["WT_TRANSPARENT"] = str(int(st["transparent"]))
+    if env["WT_STYLE"] == "linux":
+        # 亚克力只有仿 Linux 那套才可调，Windows 原生模式让脚本自己决定
+        env["WT_ACRYLIC"] = "on" if st["acrylic"] else "off"
+        face = st.get("face") or ""
+        if st.get("font_mode") == "file" and st.get("font_file"):
+            face = ttf_family(st["font_file"]) or face
+        if face:
+            env["WT_FACE"] = face
+        if st.get("weight") == "bold":
+            env["WT_FONTWEIGHT"] = "bold"
+    if st.get("cell_height"):
+        env["WT_CELLHEIGHT"] = str(st["cell_height"])
+    if not st.get("bg_enabled"):
+        env["WT_BACKGROUND"] = "off"
+    elif st.get("bg_path"):
+        env["WT_BACKGROUND"] = st["bg_path"]
+        env["WT_BGOPACITY"] = "%.2f" % st["bg_opacity"]
+        if st.get("bg_stretch"):
+            env["WT_BGSTRETCH"] = st["bg_stretch"]
+    return env
+
+
+def render_preview_direct(tool_path, st, out_path, width=520, height=0):
+    """直接跑内嵌载荷出图：绕开 cmd 逐行扫描 33MB 文件的 3 秒开销。
+    返回 (rc, 秒数)；返回 (None, 0) 表示这条路用不了，调用方退回走 -preview。"""
+    ps = powershell_exe()
+    if not ps:
+        return None, 0.0
+    try:
+        code = extract_payload(tool_path)
+    except Exception:  # noqa: BLE001
+        return None, 0.0
+    tmp = os.path.join(tempfile.gettempdir(), "clbt_prev_%d.ps1" % os.getpid())
+    t0 = time.time()
+    try:
+        # newline="" 保持载荷里的 CRLF 原样；utf-8-sig 是因为载荷里有中文注释
+        with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
+            f.write(code)
+        p = subprocess.run(
+            [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tmp],
+            capture_output=True, cwd=os.path.dirname(tool_path) or None,
+            creationflags=0x08000000, env=preview_env(st, out_path, width, height), timeout=60)
+    finally:
+        try:
+            os.remove(tmp)
+        except Exception:  # noqa: BLE001
+            pass
+    dt = time.time() - t0
+    if os.path.isfile(out_path):
+        return 0, dt
+    return (p.returncode or 1), dt
 
 
 # --------------------------------------------------------------------- 界面
@@ -471,11 +637,21 @@ class App:
         ttk.Combobox(g2, textvariable=self.var_stretch, values=labels(STRETCH_CHOICES), width=17,
                      state="readonly", font=MONO_S).grid(row=0, column=3, sticky="w", padx=(10, 0))
 
-        c, b = self._card(right, "当前设置（读自 settings.json）")
+        c, b = self._card(right, "预览（还没保存的改动也能先看到）")
         c.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        self.lbl_cur = tk.Label(b, text="…", bg=CARD, fg=FG, font=MONO_S, justify="left",
-                                anchor="w")
+        # 图是 520x292，居中显示；底色用卡片色 + 细边，两边不会出现硬邦邦的黑边
+        self.lbl_preview = tk.Label(b, text="正在生成预览…", bg=CARD2, fg=DIM,
+                                    font=MONO_S, width=52, height=13,
+                                    highlightthickness=1, highlightbackground=LINE)
+        self.lbl_preview.pack(fill="x")
+        self.lbl_prev_info = tk.Label(b, text="", bg=CARD, fg=DIM, font=MONO_S, anchor="w")
+        self.lbl_prev_info.pack(fill="x", pady=(4, 0))
+        self.lbl_cur = tk.Label(b, text="", bg=CARD, fg=DIM, font=MONO_S, anchor="w",
+                                wraplength=500, justify="left")
         self.lbl_cur.pack(fill="x")
+        self._preview_img = None
+        self._preview_job = None
+        self._preview_seq = 0
 
         c, b = self._card(right, "输出")
         c.grid(row=2, column=0, sticky="nsew")
@@ -528,14 +704,95 @@ class App:
             except Exception:
                 pass
 
+    # ---------------- 预览
+    def _schedule_preview(self, delay=350):
+        if not hasattr(self, "_preview_job"):
+            return
+        try:
+            if self._preview_job:
+                self.root.after_cancel(self._preview_job)
+        except Exception:
+            pass
+        self._preview_job = self.root.after(delay, self._render_preview)
+
+    def _render_preview(self):
+        self._preview_job = None
+        if not self.tool:
+            self.lbl_preview.configure(text="找不到 terminal-setup.cmd", image="")
+            return
+        self._preview_seq += 1
+        seq = self._preview_seq
+        out = os.path.join(tempfile.gettempdir(), f"clbt_preview_{os.getpid()}.png")
+        try:
+            if os.path.isfile(out):
+                os.remove(out)
+        except Exception:
+            pass
+        st = self._state()
+        # 按预览卡的实际宽度出图，铺满卡片（高度固定 292，比例像真实终端）
+        try:
+            pw = int(self.lbl_preview.winfo_width()) - 4
+        except Exception:  # noqa: BLE001
+            pw = 520
+        if pw < 320:
+            pw = 520
+        ph = 292
+        self.lbl_prev_info.configure(text="正在生成预览 . . .")
+
+        def work():
+            rc, dt = render_preview_direct(self.tool, st, out, pw, ph)
+            if rc is None:      # 直跑载荷不可用：退回走命令行（慢一点，但一定有图）
+                t0 = time.time()
+                try:
+                    p = subprocess.run([self.tool, "-preview", out] + build_apply_args(st),
+                                       capture_output=True, cwd=os.path.dirname(self.tool),
+                                       creationflags=0x08000000, timeout=180)
+                    rc = 0 if os.path.isfile(out) else (p.returncode or 1)
+                except Exception as e:  # noqa: BLE001
+                    rc = -1
+                    self.q.put(("line", f"预览失败: {e}"))
+                dt = time.time() - t0
+            self.q.put(("preview", (seq, rc, out, st, dt)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_preview(self, payload):
+        seq, rc, path, st, dt = payload
+        if seq != self._preview_seq:
+            return              # 有更新的预览在生成，丢掉这次结果
+        if rc == 0 and os.path.isfile(path):
+            try:
+                img = tk.PhotoImage(file=path)
+                self._preview_img = img
+                # width/height 是"字符数"，不归零的话图片会被裁成一条细缝
+                self.lbl_preview.configure(image=img, text="", width=0, height=0)
+            except Exception as e:  # noqa: BLE001
+                self.lbl_preview.configure(text=f"预览加载失败：{e}", image="",
+                                           width=52, height=13)
+        else:
+            self.lbl_preview.configure(text=f"预览生成失败（rc={rc}）\n{path}", image="",
+                                       width=52, height=13)
+        bg = "无"
+        if st["bg_enabled"]:
+            bg = "有" if st["bg_path"] else "未选"
+        style = "仿 Linux" if st["style"] == "linux" else "Windows 原生"
+        acr = "开" if st["acrylic"] else "关"
+        face = self.var_face.get() if st["style"] == "linux" else "系统默认"
+        self.lbl_prev_info.configure(
+            text=f"{style} · 不透明度 {100 - st['transparent']}% · 亚克力{acr} · "
+                 f"背景图 {bg}（浓淡 {st['bg_opacity']:.2f}）· {face} / {self.var_weight.get()}"
+                 f"　·　{dt:.1f}s")
+
     # ---------------- 未保存状态
     def _mark_dirty(self, *_args):
         if getattr(self, "_loading", False):
             return
         if self.dirty:
+            self._schedule_preview()
             return
         self.dirty = True
         self._refresh_dirty_ui()
+        self._schedule_preview()
 
     def _mark_clean(self, flash=False):
         self.dirty = False
@@ -607,6 +864,7 @@ class App:
         self._bg_hint()
         self._loading = False
         self._mark_clean()
+        self._schedule_preview(200)
 
     def _refresh_status(self):
         cur = read_current_settings()
@@ -616,17 +874,14 @@ class App:
             return
         op = cur.get("opacity")
         bg = cur.get("bg")
-        rows = [
-            ("不透明度", f"{op}%" if isinstance(op, int) else "（默认）"),
-            ("亚克力", "开启" if cur.get("acrylic") else "关闭"),
-            ("配色方案", cur.get("scheme") or "（默认）"),
-            ("字体", (cur.get("face") or "系统默认") +
-                     (f" {cur.get('size')}pt" if cur.get("size") else "")),
-            ("背景图", os.path.basename(bg) if bg else "（无）"),
+        parts = [
+            f"已保存：不透明度 {op}%" if isinstance(op, int) else "已保存：不透明度（默认）",
+            "亚克力开" if cur.get("acrylic") else "亚克力关",
+            cur.get("scheme") or "默认配色",
+            (cur.get("face") or "系统字体") + (f" {cur.get('size')}pt" if cur.get("size") else ""),
+            os.path.basename(bg) if bg else "无背景图",
         ]
-        if bg and cur.get("bgOpacity") is not None:
-            rows.append(("背景浓淡", str(cur["bgOpacity"])))
-        self.lbl_cur.configure(text="\n".join(f"{k}\t{v}" for k, v in rows))
+        self.lbl_cur.configure(text=" · ".join(parts))
 
     # ---------------- 回调
     def _transp_text(self):
@@ -754,6 +1009,9 @@ class App:
         try:
             while True:
                 kind, payload = self.q.get_nowait()
+                if kind == "preview":
+                    self._apply_preview(payload)
+                    continue
                 if kind == "line":
                     if payload.strip():
                         self.log(payload, self._tag_for(payload))
