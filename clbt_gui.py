@@ -327,7 +327,9 @@ def run_payload(tool_path, extra_env, timeout=60):
         code = extract_payload(tool_path)
     except Exception as e:  # noqa: BLE001
         return None, str(e)
-    tmp = os.path.join(tempfile.gettempdir(), "clbt_run_%d.ps1" % os.getpid())
+    # 每次用独立临时文件：预览和"检查更新"可能同时在跑，共用一个名字会互相删掉
+    fd, tmp = tempfile.mkstemp(prefix="clbt_run_", suffix=".ps1")
+    os.close(fd)
     try:
         # newline="" 保持载荷里的 CRLF 原样；utf-8-sig 是因为载荷里有中文注释
         with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
@@ -369,30 +371,72 @@ GITHUB_RELEASES = "https://github.com/pyxyd/CLBT-Win/releases"
 
 
 def download_update(info, log=None):
-    """把最新版的 CLBT.zip 下下来、校验 sha256、解开，返回 install.exe 的路径"""
+    """把最新版的 CLBT.zip 下下来、校验 sha256、解开，返回 install.exe 的路径。
+
+    GitHub 的下载 CDN 在部分网络下会被限速（实测有过 0.01 MB/s），所以：
+    - 支持断点续传（.part 文件），中断了再点一次会接着下
+    - 每 3 秒报一次速度 / 剩余时间，让人知道它在动
+    """
     url = info.get("url") or ""
     if not url:
         raise RuntimeError("这个版本没有 CLBT.zip")
     latest = info.get("latest") or "new"
     size = int(info.get("size") or 0)
     dest = os.path.join(tempfile.gettempdir(), "clbt_update_%s.zip" % latest)
-    if log:
-        log("  下载 %.1f MB …" % (size / 1048576.0))
-    req = urllib.request.Request(url, headers={"User-Agent": "CLBT-GUI"})
-    got = 0
-    with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
-        while True:
-            chunk = r.read(1 << 18)
-            if not chunk:
-                break
-            f.write(chunk)
-            got += len(chunk)
-            if log and size:
-                pct = got * 100 // size
-                if pct % 25 == 0 and pct:
-                    log("  已下载 %d%%" % pct)
-    if size and got != size:
-        raise RuntimeError("下载不完整（%d / %d 字节）" % (got, size))
+    part = dest + ".part"
+
+    if os.path.isfile(dest) and (not size or os.path.getsize(dest) == size):
+        if log:
+            log("  已经有下载好的包，直接校验")
+    else:
+        if os.path.isfile(dest):
+            try:
+                os.remove(dest)
+            except Exception:  # noqa: BLE001
+                pass
+        have = os.path.getsize(part) if os.path.isfile(part) else 0
+        headers = {"User-Agent": "CLBT-GUI"}
+        if have:
+            headers["Range"] = "bytes=%d-" % have
+            if log:
+                log("  继续上次的进度（已下 %.1f MB）" % (have / 1048576.0))
+        if log:
+            log("  下载 %.1f MB …" % (size / 1048576.0))
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            r = urllib.request.urlopen(req, timeout=60)
+            status = getattr(r, "status", 200)
+        except Exception:  # noqa: BLE001
+            r = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "CLBT-GUI"}),
+                                      timeout=60)
+            status, have = 200, 0
+        if have and status != 206:      # 服务器不认 Range，只能重头下
+            have = 0
+        got = have
+        t0 = time.time()
+        last = t0
+        with r, open(part, "ab" if have else "wb") as f:
+            while True:
+                chunk = r.read(1 << 18)
+                if not chunk:
+                    break
+                f.write(chunk)
+                got += len(chunk)
+                now = time.time()
+                if log and now - last >= 3.0:
+                    last = now
+                    spd = got / max(0.1, now - t0) / 1048576.0
+                    if size and spd > 0.001:
+                        eta = (size - got) / (spd * 1048576.0)
+                        log("  %.0f%%  %.1f MB  %.2f MB/s  还要 %.0f 秒"
+                            % (got * 100.0 / size, got / 1048576.0, spd, eta))
+                    else:
+                        log("  已下 %.1f MB  %.2f MB/s" % (got / 1048576.0, spd))
+        if size and got != size:
+            raise RuntimeError("下载不完整（%.1f / %.1f MB）。网络断了的话再点一次「更新」，"
+                               "会接着下。" % (got / 1048576.0, size / 1048576.0))
+        os.replace(part, dest)
+
     digest = (info.get("digest") or "").split(":", 1)[-1].strip().lower()
     if digest:
         h = hashlib.sha256()
@@ -400,7 +444,11 @@ def download_update(info, log=None):
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
         if h.hexdigest() != digest:
-            raise RuntimeError("sha256 校验失败，已放弃安装")
+            try:
+                os.remove(dest)
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError("sha256 校验失败，已删除坏包，请重试")
         if log:
             log("  sha256 校验通过")
     outdir = os.path.join(tempfile.gettempdir(), "clbt_update_%s" % latest)
@@ -766,7 +814,8 @@ class TermView:
                 #  - 命令里带引号/竖线/& 不会被 cmd 二次解析
                 #  - powershell 一启动控制台就是 UTF-8，连"解析错误"这种由宿主打印的
                 #    中文也不会变成乱码
-                tmp = os.path.join(tempfile.gettempdir(), "clbt_cmd_%d.ps1" % os.getpid())
+                fd, tmp = tempfile.mkstemp(prefix="clbt_cmd_", suffix=".ps1")
+                os.close(fd)
                 with open(tmp, "w", encoding="utf-8-sig", newline="\r\n") as f:
                     f.write("[Console]::OutputEncoding = [Text.Encoding]::UTF8\r\n")
                     f.write(line + "\r\n")
@@ -849,7 +898,9 @@ class App:
         self.busy = False
         self.action_buttons = []
         self.dirty = False        # 有未保存的改动？
+        self._clean_state = ()    # 最近一次"干净"时的所有控件取值，用来判断是不是真的变了
         self._loading = True      # 预填期间不要标脏
+        self._settling = True     # 首帧布局期间控件会把值同步一遍，这段时间不算用户改动
 
         root.title(f"{APP_TITLE}  v{VERSION}")
         root.configure(bg=BG)
@@ -878,6 +929,8 @@ class App:
         self.root.after(700, self.term.focus)
         # 静默查一次更新：有新版就把右下角按钮变成「⬆ 更新到 vX」
         self.root.after(2500, lambda: self._check_update(silent=True))
+        # 首帧布局结束：把此时的状态当作"干净"基线，之后才认用户改动
+        self.root.after(900, self._finish_settle)
         if not self.tool:
             self.log("找不到 terminal-setup.cmd —— 请先运行 install.exe 安装。", "err")
 
@@ -949,7 +1002,7 @@ class App:
     def _build_ui(self):
         """两列固定布局：左列宽度固定，右列吃掉剩余空间，任何窗口尺寸都不会溢出"""
         root = self.root
-        root.grid_rowconfigure(1, weight=1)
+        root.grid_rowconfigure(2, weight=1)
         root.grid_columnconfigure(0, weight=1)
 
         # ---- 顶栏
@@ -961,10 +1014,31 @@ class App:
                  font=UI).pack(side="left", pady=(5, 0))
         self.lbl_tool = tk.Label(head, text=self.tool or "未找到工具", bg=BG, fg=DIM, font=MONO_S)
         self.lbl_tool.pack(side="right", pady=(5, 0))
+        # 页眉上的「检查更新」小链接：平时低调，发现新版会变黄
+        self.btn_update = tk.Label(head, text="检查更新", bg=BG, fg=BLUE,
+                                   font=("Microsoft YaHei UI", 9, "underline"),
+                                   cursor="hand2")
+        self.btn_update.pack(side="right", padx=(0, 18), pady=(5, 0))
+        self.btn_update.bind("<Button-1>", lambda e: self._on_update_click())
+
+        # ---- 新版横幅：整条黄色，点哪都行；平时收起来
+        self.bar_update = tk.Frame(root, bg=YELLOW)
+        self.bar_update.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
+        self.lbl_bar = tk.Label(self.bar_update, text="", bg=YELLOW, fg="#3A2A00",
+                                font=("Microsoft YaHei UI", 11, "bold"),
+                                anchor="w", padx=12, pady=9, cursor="hand2")
+        self.lbl_bar.pack(side="left")
+        self.lbl_bar_go = tk.Label(self.bar_update, text="点这里更新  →", bg=YELLOW, fg="#3A2A00",
+                                   font=("Microsoft YaHei UI", 11, "bold"), padx=12, pady=9,
+                                   cursor="hand2")
+        self.lbl_bar_go.pack(side="right")
+        for w in (self.bar_update, self.lbl_bar, self.lbl_bar_go):
+            w.bind("<Button-1>", lambda e: self._start_update())
+        self.bar_update.grid_remove()
 
         # ---- 主体两列
         body = tk.Frame(root, bg=BG)
-        body.grid(row=1, column=0, sticky="nsew", padx=14)
+        body.grid(row=2, column=0, sticky="nsew", padx=14)
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(0, weight=0, minsize=470)
         body.grid_columnconfigure(1, weight=1)
@@ -1127,7 +1201,7 @@ class App:
 
         # ---- 底部按钮：保存做成整条最扎眼的那一个
         acts = tk.Frame(root, bg=BG)
-        acts.grid(row=2, column=0, sticky="ew", padx=14, pady=(10, 12))
+        acts.grid(row=3, column=0, sticky="ew", padx=14, pady=(10, 12))
 
         self.btn_apply = tk.Button(
             acts, text="💾  保存设置", command=self._apply,
@@ -1150,9 +1224,6 @@ class App:
         diag = self._btn(acts, "环境诊断", self._diagnose, bg=CARD, fg=CYAN)
         diag.pack(side="right", padx=(0, 8))
         self._btn(acts, "清空日志", self._clear_log, bg=CARD, fg=DIM).pack(side="right")
-        self.btn_update = self._btn(acts, "检查更新", self._on_update_click, bg=CARD, fg=BLUE)
-        self.btn_update.pack(side="right", padx=(0, 8))
-        self.action_buttons.append(self.btn_update)
 
         # 任何控件一改就提示「有未保存的改动」
         for var in (self.var_style, self.var_transp, self.var_enc, self.var_adapt,
@@ -1252,7 +1323,7 @@ class App:
                 messagebox.showerror(APP_TITLE, "找不到 terminal-setup.cmd，没法检查更新。")
             return
         self.update_busy = True
-        self.btn_update.configure(text="检查中…", state="disabled")
+        self.btn_update.configure(text="检查中…", fg=DIM)
         if not silent:
             self.log("$ CLBT -update check", "cmd")
 
@@ -1289,7 +1360,8 @@ class App:
         self.update_busy = False
         if err or not info or info.get("error"):
             msg = err or (info or {}).get("error") or "未知错误"
-            self.btn_update.configure(text="检查更新", state="normal", bg=CARD, fg=BLUE)
+            self.btn_update.configure(text="检查更新", fg=BLUE)
+            self.bar_update.grid_remove()
             if not silent:
                 self.log("  检查更新失败: " + msg, "err")
             return
@@ -1297,16 +1369,19 @@ class App:
         cur, latest = info.get("current"), info.get("latest")
         if info.get("newer"):
             self.log("  发现新版本 v%s（当前 v%s）" % (latest, cur), "warn")
-            self.log("  点右下角「⬆ 更新到 v%s」即可：会自动下载、校验、关界面、装完再打开" % latest,
-                     "dim")
-            self.btn_update.configure(text="⬆ 更新到 v%s" % latest, state="normal",
-                                      bg=YELLOW, fg="#3A2A00")
+            self.lbl_bar.configure(text="⬆  有新版本 v%s（当前 v%s）" % (latest, cur))
+            self.bar_update.grid()
+            self.btn_update.configure(text="检查更新", fg=YELLOW)
+            self.log("  点上面那条黄横幅就能更新：自动下载、校验、关界面、装完再打开", "dim")
         else:
+            self.bar_update.grid_remove()
+            self.btn_update.configure(text="✓ v%s 已最新" % cur, fg=GREEN)
             if not silent:
                 self.log("  已经是最新版本 v%s" % cur, "ok")
-            self.btn_update.configure(text="✓ v%s 已最新" % cur, state="normal", bg=CARD, fg=GREEN)
 
     def _start_update(self):
+        if self.update_busy:
+            return                  # 已经在下载/检查了，别重复开
         info = self.update_info or {}
         latest = info.get("latest") or "?"
         if not info.get("newer"):
@@ -1320,7 +1395,8 @@ class App:
                                    "（装到 Program Files 的话会弹一次 UAC，点是）" % latest):
             return
         self.update_busy = True
-        self.btn_update.configure(text="下载中…", state="disabled")
+        self.btn_update.configure(text="下载中…", fg=DIM)
+        self.lbl_bar.configure(text="  正在下载 v%s …" % latest)
         self.log("  正在下载 v%s …" % latest, "dim")
 
         def work():
@@ -1345,7 +1421,8 @@ class App:
                 f.write('del "%~f0" >nul 2>&1\r\n')
         except Exception as e:  # noqa: BLE001
             self.log("  写升级脚本失败: %s" % e, "err")
-            self.btn_update.configure(text="检查更新", state="normal", bg=CARD, fg=BLUE)
+            self.btn_update.configure(text="检查更新", fg=BLUE)
+            self.bar_update.grid_remove()
             return
         self.log("  下载完成，正在关闭界面并安装 …", "ok")
         try:
@@ -1355,20 +1432,38 @@ class App:
         except Exception as e:  # noqa: BLE001
             self.log("  启动安装脚本失败: %s" % e, "err")
             return
-        self.root.destroy()
+        # 直接退出进程：安装器在等我们放开 CLBT-GUI.exe 的文件占用，
+        # 走正常 destroy 还会让待执行的 after 回调报 "invalid command name"
+        os._exit(0)
 
     def _on_update_failed(self, msg):
         self.update_busy = False
-        self.btn_update.configure(text="检查更新", state="normal", bg=CARD, fg=BLUE)
+        self.btn_update.configure(text="检查更新", fg=BLUE)
         self.log("  更新失败: " + msg, "err")
         messagebox.showerror(APP_TITLE, "更新失败：\n" + msg)
 
     # ---------------- 未保存状态
+    def _snapshot(self):
+        """把所有控件的当前取值拼成一个元组，用来判断"到底有没有改"""
+        vs = (self.var_style, self.var_transp, self.var_enc, self.var_adapt, self.var_acrylic,
+              self.var_face, self.var_weight, self.var_font_file, self.var_cellh, self.var_aa,
+              self.var_adjust, self.var_bg_on, self.var_bg, self.var_bg_op, self.var_align,
+              self.var_stretch, self.var_font_mode)
+        return tuple(str(v.get()) for v in vs)
+
+    def _finish_settle(self):
+        self._settling = False
+        self._mark_clean()
+
     def _mark_dirty(self, *_args):
-        if getattr(self, "_loading", False):
+        if getattr(self, "_loading", False) or getattr(self, "_settling", False):
             return
         if self.dirty:
             self._schedule_preview()
+            return
+        # 控件的 trace 是"写就触发"，建控件/布局期间会写回同样的值；
+        # 取值和"干净快照"一致就不是用户改的，别标脏
+        if self._snapshot() == self._clean_state:
             return
         self.dirty = True
         self._refresh_dirty_ui()
@@ -1376,6 +1471,7 @@ class App:
 
     def _mark_clean(self, flash=False):
         self.dirty = False
+        self._clean_state = self._snapshot()
         self._refresh_dirty_ui()
         if flash:
             self.lbl_dirty.configure(text="✓ 已保存", fg=GREEN)
@@ -1443,6 +1539,7 @@ class App:
         self._on_bg_toggle()
         self._bg_hint()
         self._loading = False
+        self._clean_state = self._snapshot()
         self._mark_clean()
         self._schedule_preview(200)
 
@@ -1470,14 +1567,22 @@ class App:
 
     def _on_transp(self):
         t = int(float(self.scale_transp.get()))
-        self.var_transp.set(t)
+        # 只在真的变了才写：Tk 的 trace 是"写就触发"，重复写同一个值会把界面标脏。
+        # 另外预填/建控件期间的临时回调（from_ 值 0）也不能写，否则一开窗就显示"有未保存改动"
+        if not getattr(self, "_loading", False) and self.var_transp.get() != str(t):
+            self.var_transp.set(t)
         txt = f"透明度 {t}%  →  不透明度 {100 - t}%"
         txt += "    亚克力：磨砂玻璃" if self.var_acrylic.get() else "    亚克力：关（真透明）"
         self.lbl_transp.configure(text=txt)
 
     def _on_bgop(self):
         v = float(self.scale_bgop.get())
-        self.var_bg_op.set(v)
+        try:
+            same = abs(float(self.var_bg_op.get() or 0) - v) < 1e-9
+        except Exception:  # noqa: BLE001
+            same = False
+        if not same and not getattr(self, "_loading", False):
+            self.var_bg_op.set(v)
         self.lbl_bgop.configure(text=f"{v:.2f}")
 
     def _bg_hint(self):
