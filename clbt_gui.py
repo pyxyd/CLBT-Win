@@ -578,6 +578,9 @@ class TermView:
         c.bind("<Control-c>", lambda e: (self._cancel(), "break")[1])
         c.bind("<Escape>", lambda e: (self._cancel(), "break")[1])
         c.bind("<Tab>", lambda e: (self._insert("    "), "break")[1])
+        c.bind("<Control-v>", self._paste)
+        c.bind("<Control-V>", self._paste)
+        c.bind("<Button-3>", self._paste)          # 右键也能粘
         c.bind("<MouseWheel>", self._on_wheel)
 
     def focus(self):
@@ -605,6 +608,18 @@ class TermView:
     def _cancel(self):
         self.input = ""
         self.redraw()
+
+    def _paste(self, _ev=None):
+        """Ctrl+V：把剪贴板粘到当前行（多行只取第一行，换行在终端里等于回车，别误执行）"""
+        try:
+            data = self.canvas.clipboard_get()
+        except Exception:  # noqa: BLE001
+            return "break"
+        if not data:
+            return "break"
+        self.input += data.replace("\r\n", "\n").replace("\r", "\n").split("\n")[0]
+        self.redraw()
+        return "break"
 
     def _clear(self):
         self.lines = []
@@ -747,6 +762,8 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(60, self._drain)
         self.root.after(120, self._dark_titlebar)
+        # 开窗后把焦点直接给预览终端：打开就能打字，不用先点一下
+        self.root.after(700, self.term.focus)
         if not self.tool:
             self.log("找不到 terminal-setup.cmd —— 请先运行 install.exe 安装。", "err")
 
@@ -969,7 +986,7 @@ class App:
         self.term.canvas.pack(fill="x")
         self.lbl_prev_info = tk.Label(b, text="", bg=CARD, fg=DIM, font=MONO_S, anchor="w")
         self.lbl_prev_info.pack(fill="x", pady=(4, 0))
-        tk.Label(b, text="直接输入 PowerShell 命令：回车执行、↑↓ 翻历史、cls 清屏、Ctrl+C 取消当前行",
+        tk.Label(b, text="直接输入 PowerShell 命令：回车执行、↑↓ 翻历史、Ctrl+V 粘贴、cls 清屏",
                  bg=CARD, fg=DIM, font=MONO_S, anchor="w").pack(fill="x")
         self.lbl_cur = tk.Label(b, text="", bg=CARD, fg=DIM, font=MONO_S, anchor="w",
                                 wraplength=500, justify="left")
