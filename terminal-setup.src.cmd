@@ -660,6 +660,8 @@ function Render-Preview([string]$OutPath) {
 
     if ($env:WT_PREVIEW_TIMING) { Write-Host ("  [timing]   背景合成: " + [int]((Get-Date) - $__p).TotalMilliseconds + " ms") -ForegroundColor DarkGray; $__p = Get-Date }
     # ---- 5) 文字（模拟终端内容）
+    #   WT_PREVIEW_NOTEXT=1 只出背景：图形界面要在这张背景上叠一个真能打字的终端
+    if (-not $env:WT_PREVIEW_NOTEXT) {
     $px = 15.0
     $fontStyle = if ($bold) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }
     $useFamily = $face
@@ -737,6 +739,7 @@ function Render-Preview([string]$OutPath) {
 
     foreach ($b in @($brushFg, $brushDim, $brushGreen, $brushBlue, $brushCyan, $brushYellow, $brushRed)) { $b.Dispose() }
     $font.Dispose()
+    }
     $g.Dispose()
 
     $dir = Split-Path -Parent $OutPath

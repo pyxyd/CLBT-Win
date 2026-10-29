@@ -1,6 +1,6 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 1, 0), prodvers=(1, 1, 1, 0),
+    filevers=(1, 1, 2, 0), prodvers=(1, 1, 2, 0),
     mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)
   ),
   kids=[
@@ -8,12 +8,12 @@ VSVersionInfo(
       StringTable('080404B0', [
         StringStruct('CompanyName', 'CLBT'),
         StringStruct('FileDescription', 'CLBT - Windows 命令行美化工具'),
-        StringStruct('FileVersion', '1.1.1.0'),
+        StringStruct('FileVersion', '1.1.2.0'),
         StringStruct('InternalName', 'CLBT'),
         StringStruct('LegalCopyright', 'Font: SIL OFL 1.1 (0xType Project Authors)'),
         StringStruct('OriginalFilename', 'install.exe'),
         StringStruct('ProductName', 'CLBT'),
-        StringStruct('ProductVersion', '1.1.1.0')
+        StringStruct('ProductVersion', '1.1.2.0')
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

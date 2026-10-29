@@ -30,6 +30,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from ctypes import wintypes
 
 try:
@@ -389,14 +390,24 @@ def do_install(target_dir, do_encoding=True, keep_old=False):
     gui_src = bundled_gui_path()
     if os.path.isfile(gui_src):
         gui_dst = os.path.join(target_dir, GUI_NAME)
-        try:
-            if os.path.isfile(gui_dst) and os.path.getsize(gui_dst) == os.path.getsize(gui_src):
-                say(f"    图形界面已是最新，跳过: {gui_dst}")
-            else:
+        written = False
+        for attempt in range(6):
+            try:
+                if os.path.isfile(gui_dst) and os.path.getsize(gui_dst) == os.path.getsize(gui_src):
+                    say(f"    图形界面已是最新，跳过: {gui_dst}")
+                    written = True
+                    break
                 shutil.copy2(gui_src, gui_dst)
                 say(f"    图形界面: {gui_dst}  ({os.path.getsize(gui_src) / 1048576:.2f} MB)")
-        except Exception as e:
-            say(f"    [!] 图形界面写入失败: {e}")
+                written = True
+                break
+            except Exception as e:  # noqa: BLE001
+                # 最常见：CLBT-GUI.exe 还开着，文件被占用。等它一会儿再试
+                if attempt == 0:
+                    say(f"    [!] 图形界面正在使用中，正在重试（关掉 CLBT-GUI.exe 会更快）: {e}")
+                time.sleep(2.0)
+        if not written:
+            say("    [XX] 图形界面没能更新：请先关掉所有 CLBT-GUI.exe 窗口，然后重新运行 install.exe")
 
     # 行尾自检：LF 会让 cmd 误执行内嵌脚本
     if ensure_crlf(dst_tool):

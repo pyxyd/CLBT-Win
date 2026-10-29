@@ -26,9 +26,10 @@ import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -278,7 +279,7 @@ def ttf_family(path):
         return ""
 
 
-def preview_env(st, out_path, width=520, height=0):
+def preview_env(st, out_path, width=520, height=0, notext=False):
     """界面状态 -> 预览用的环境变量（Render-Preview 认的就是这套 WT_*）"""
     env = dict(os.environ)
     for k in _OUR_ENV:
@@ -288,6 +289,8 @@ def preview_env(st, out_path, width=520, height=0):
     env["WT_PREVIEW_W"] = str(int(width))
     if height:
         env["WT_PREVIEW_H"] = str(int(height))
+    if notext:
+        env["WT_PREVIEW_NOTEXT"] = "1"      # 只要背景，文字由界面自己画（能打字）
     env["WT_STYLE"] = "win" if st["style"] == "win" else "linux"
     env["WT_TRANSPARENT"] = str(int(st["transparent"]))
     if env["WT_STYLE"] == "linux":
@@ -312,7 +315,7 @@ def preview_env(st, out_path, width=520, height=0):
     return env
 
 
-def render_preview_direct(tool_path, st, out_path, width=520, height=0):
+def render_preview_direct(tool_path, st, out_path, width=520, height=0, notext=False):
     """直接跑内嵌载荷出图：绕开 cmd 逐行扫描 33MB 文件的 3 秒开销。
     返回 (rc, 秒数)；返回 (None, 0) 表示这条路用不了，调用方退回走 -preview。"""
     ps = powershell_exe()
@@ -331,7 +334,8 @@ def render_preview_direct(tool_path, st, out_path, width=520, height=0):
         p = subprocess.run(
             [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tmp],
             capture_output=True, cwd=os.path.dirname(tool_path) or None,
-            creationflags=0x08000000, env=preview_env(st, out_path, width, height), timeout=60)
+            creationflags=0x08000000, env=preview_env(st, out_path, width, height, notext),
+            timeout=60)
     finally:
         try:
             os.remove(tmp)
@@ -341,6 +345,327 @@ def render_preview_direct(tool_path, st, out_path, width=520, height=0):
     if os.path.isfile(out_path):
         return 0, dt
     return (p.returncode or 1), dt
+
+
+# --------------------------------------------------------------------- 迷你终端
+
+# 和 terminal-setup.cmd 里预览渲染用的两套配色保持一致
+TERM_PALETTES = {
+    "linux": {"fg": "#D3D7CF", "dim": "#8A8C85", "green": "#8AE234", "blue": "#729FCF",
+              "cyan": "#34E2E2", "yellow": "#FCE94F", "red": "#EF2929", "bg": "#000000"},
+    "win": {"fg": "#CCCCCC", "dim": "#8A8A8A", "green": "#CCCCCC", "blue": "#CCCCCC",
+            "cyan": "#CCCCCC", "yellow": "#FCE94F", "red": "#E06C75", "bg": "#0C0C0C"},
+}
+CJK_FAMILIES = ("Microsoft YaHei UI", "Microsoft YaHei", "SimSun")
+# 这些区段交给等宽字体（Nerd Font 图标、箭头、制表符都在里面），其余非 ASCII 交回 CJK 字体
+MONO_RANGES = ((0x2000, 0x27BF), (0xE000, 0xF8FF), (0xF0000, 0x10FFFD))
+
+
+class TermView:
+    """预览卡里的迷你终端：背景是渲染出来的图，文字层自己画，能打字、回车真的跑命令。
+
+    这样在界面里调透明度/磨砂/字体时，看的不是一张定死的示意图，而是"拿自己的命令试"。
+    """
+
+    MAX_LINES = 400
+
+    def __init__(self, parent, app, width=520, height=292):
+        self.app = app
+        self.q = app.q
+        self.width = int(width)
+        self.height = int(height)
+        self.px = 15
+        self.x0 = 14
+        self.y0 = 10
+        self.busy = False
+        self.canvas = tk.Canvas(parent, height=self.height, bg="#000000", bd=0,
+                                highlightthickness=1, highlightbackground=LINE,
+                                highlightcolor=CYAN, cursor="xterm", takefocus=1)
+        self._bg_item = self.canvas.create_image(0, 0, anchor="nw")
+        self._bg_img = None
+        self._err = ""
+        self._cursor_on = True
+        self._cur_item = None
+        self._cur_xy = None
+        self.lines = []          # 已经显示出来的行：[[(文本, 颜色角色), ...], ...]
+        self.input = ""
+        self.history = []
+        self.hist_pos = 0
+        self.offset = 0
+        self.theme = TERM_PALETTES["linux"]
+        self.mono = tkfont.Font(family="Cascadia Mono", size=-self.px)
+        self.cjk = tkfont.Font(family=CJK_FAMILIES[0], size=-self.px)
+        self.line_h = 22
+        self._bind()
+        self.reset()
+        self._blink()
+
+    # ---- 外观
+    def set_theme(self, st):
+        style = "win" if st.get("style") == "win" else "linux"
+        self.theme = TERM_PALETTES[style]
+        family = st.get("face") or "Consolas"
+        weight = "bold" if st.get("weight") == "bold" else "normal"
+        try:
+            self.mono.configure(family=family, size=-self.px, weight=weight)
+        except Exception:  # noqa: BLE001
+            self.mono.configure(family="Consolas", size=-self.px, weight=weight)
+        cellh = 1.0
+        try:
+            cellh = float(st.get("cell_height") or 1.0) or 1.0
+        except Exception:  # noqa: BLE001
+            cellh = 1.0
+        self.line_h = max(int(round(self.px * 1.45 * cellh)), self.mono.metrics("linespace") + 2)
+        self.redraw()
+
+    def set_background(self, path):
+        try:
+            img = tk.PhotoImage(file=path)
+        except Exception as e:  # noqa: BLE001
+            self.show_error("预览图加载失败：%s" % e)
+            return
+        self._bg_img = img
+        self._err = ""
+        w = self.canvas.winfo_width() or self.width
+        x = max(0, (int(w) - img.width()) // 2)
+        y = max(0, (int(self.height) - img.height()) // 2)
+        self.canvas.itemconfigure(self._bg_item, image=img)
+        self.canvas.coords(self._bg_item, x, y)
+        self.redraw()
+
+    def show_error(self, msg):
+        self._err = msg
+        self.redraw()
+
+    # ---- 内容
+    def reset(self):
+        self.lines = [[("Windows PowerShell", "dim")],
+                      [("Copyright (C) Microsoft Corporation. All rights reserved.", "dim")],
+                      []]
+        self.input = ""
+        self.offset = 0
+        self.redraw()
+
+    def append_output(self, text):
+        text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+        for ln in text.split("\n"):
+            self.lines.append([(ln.rstrip(), "fg")] if ln.strip() else [])
+        while self.lines and not self.lines[-1]:
+            self.lines.pop()
+        if len(self.lines) > self.MAX_LINES:
+            del self.lines[:-self.MAX_LINES]
+        self.offset = 0
+        self.redraw()
+
+    def finish_command(self, out):
+        """命令跑完：把"执行中"那行换成真正的输出"""
+        if self.lines and len(self.lines[-1]) == 1 and self.lines[-1][0][0].strip() == "执行中 . . .":
+            self.lines.pop()
+        lines = (out or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if len(lines) > 400:
+            lines = lines[:400] + ["（输出太长，只显示前 400 行）"]
+        self.append_output("\n".join(lines))
+
+    def _prompt_runs(self):
+        # 和预览渲染器画的那行提示符一致
+        return [("user@host", "green"), (":", "dim"), ("~/project", "blue"), ("$ ", "dim")]
+    def _input_runs(self):
+        runs = list(self._prompt_runs())
+        if self.input:
+            runs.append((self.input, "fg"))
+        return runs
+
+    # ---- 画
+    def _char_font(self, ch):
+        o = ord(ch)
+        if o < 0x2000 or o > 0x10FFFF:
+            return self.mono
+        for lo, hi in MONO_RANGES:
+            if lo <= o <= hi:
+                return self.mono
+        return self.cjk
+
+    def _draw_text(self, text, role, x, y):
+        color = self.theme.get(role) or self.theme["fg"]
+        chunk, font = "", None
+        for ch in text:
+            f = self._char_font(ch)
+            if font is None:
+                font, chunk = f, ch
+                continue
+            if f is font:
+                chunk += ch
+            else:
+                self.canvas.create_text(x, y, text=chunk, fill=color, font=font,
+                                        anchor="nw", tags="txt")
+                x += font.measure(chunk)
+                chunk, font = ch, f
+        if chunk:
+            self.canvas.create_text(x, y, text=chunk, fill=color, font=font,
+                                    anchor="nw", tags="txt")
+            x += font.measure(chunk)
+        return x
+
+    def _measure(self, text):
+        total, chunk, font = 0, "", None
+        for ch in text:
+            f = self._char_font(ch)
+            if font is None:
+                font, chunk = f, ch
+                continue
+            if f is font:
+                chunk += ch
+            else:
+                total += font.measure(chunk)
+                chunk, font = ch, f
+        if chunk:
+            total += font.measure(chunk)
+        return total
+
+    def redraw(self):
+        if not self.canvas.winfo_exists():
+            return
+        c = self.canvas
+        c.delete("txt")
+        self._cur_item = None
+        self._cur_xy = None
+        rows = max(1, (self.height - 2 * self.y0) // self.line_h)
+        all_lines = list(self.lines) + [self._input_runs()]
+        start = max(0, len(all_lines) - rows - self.offset)
+        if self._err:
+            c.create_text(self.x0, self.y0, text=self._err, fill=RED, font=self.cjk,
+                          anchor="nw", tags="txt", width=max(200, self.width - 2 * self.x0))
+            return
+        y = self.y0
+        for idx in range(start, min(len(all_lines), start + rows)):
+            x = self.x0
+            for text, role in all_lines[idx]:
+                if text:
+                    x = self._draw_text(text, role, x, y)
+            if idx == len(all_lines) - 1:
+                self._cur_xy = (x + 1, y)
+            y += self.line_h
+        if self._cur_xy:
+            cx, cy = self._cur_xy
+            cw = max(6, self.mono.measure("0") - 2)
+            self._cur_item = c.create_rectangle(cx, cy + 2, cx + cw, cy + self.line_h - 3,
+                                               fill=self.theme["fg"], outline="", tags="txt")
+            if not self._cursor_on:
+                c.itemconfigure(self._cur_item, state="hidden")
+
+    def _blink(self):
+        if not self.canvas.winfo_exists():
+            return
+        self._cursor_on = not self._cursor_on
+        if self._cur_item:
+            try:
+                self.canvas.itemconfigure(self._cur_item,
+                                          state="normal" if self._cursor_on else "hidden")
+            except Exception:  # noqa: BLE001
+                pass
+        self.canvas.after(530, self._blink)
+
+    # ---- 输入
+    def _bind(self):
+        c = self.canvas
+        c.bind("<Button-1>", lambda e: c.focus_set())
+        c.bind("<Key>", self._on_key)
+        c.bind("<Return>", self._on_return)
+        c.bind("<BackSpace>", self._on_backspace)
+        c.bind("<Up>", lambda e: self._hist(-1))
+        c.bind("<Down>", lambda e: self._hist(1))
+        c.bind("<Control-l>", lambda e: (self._clear(), "break")[1])
+        c.bind("<Control-c>", lambda e: (self._cancel(), "break")[1])
+        c.bind("<Escape>", lambda e: (self._cancel(), "break")[1])
+        c.bind("<Tab>", lambda e: (self._insert("    "), "break")[1])
+        c.bind("<MouseWheel>", self._on_wheel)
+
+    def focus(self):
+        self.canvas.focus_set()
+
+    def _insert(self, text):
+        self.input += text
+        self.redraw()
+
+    def _on_key(self, ev):
+        ch = ev.char
+        if not ch or not ch.isprintable():
+            return None
+        if ord(ch) < 32:
+            return None
+        self._insert(ch)
+        return "break"
+
+    def _on_backspace(self, _ev=None):
+        if self.input:
+            self.input = self.input[:-1]
+            self.redraw()
+        return "break"
+
+    def _cancel(self):
+        self.input = ""
+        self.redraw()
+
+    def _clear(self):
+        self.lines = []
+        self.offset = 0
+        self.redraw()
+
+    def _hist(self, step):
+        if not self.history:
+            return "break"
+        self.hist_pos = max(0, min(len(self.history), self.hist_pos + step))
+        self.input = self.history[self.hist_pos] if self.hist_pos < len(self.history) else ""
+        self.offset = 0
+        self.redraw()
+        return "break"
+
+    def _on_wheel(self, ev):
+        step = 1 if ev.delta < 0 else -1
+        self.offset = max(0, min(max(0, len(self.lines)), self.offset + step))
+        self.redraw()
+        return "break"
+
+    def _on_return(self, _ev=None):
+        line = self.input.strip()
+        self.input = ""
+        self.lines.append(self._prompt_runs() + ([(line, "fg")] if line else []))
+        self.offset = 0
+        if not line:
+            self.redraw()
+            return "break"
+        self.history.append(line)
+        self.hist_pos = len(self.history)
+        low = line.lower()
+        if low in ("cls", "clear"):
+            self._clear()
+            return "break"
+        if low in ("exit", "quit"):
+            self.append_output("（这是预览窗口，关掉右上角的窗口才能退出 CLBT）")
+            self.redraw()
+            return "break"
+        self.lines.append([("  执行中 . . .", "dim")])
+        self.redraw()
+        threading.Thread(target=self._run, args=(line,), daemon=True).start()
+        return "break"
+
+    def _run(self, line):
+        ps = powershell_exe()
+        try:
+            if ps:
+                cmd = [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                       "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + line]
+            else:
+                cmd = ["cmd", "/c", "chcp 65001>nul & " + line]
+            p = subprocess.run(cmd, capture_output=True, creationflags=0x08000000, timeout=120)
+            out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
+            if not out.strip():
+                out = "（没有输出，返回码 %d）" % p.returncode
+        except subprocess.TimeoutExpired:
+            out = "（超时：命令跑了 120 秒还没结束）"
+        except Exception as e:  # noqa: BLE001
+            out = "（执行失败：%s）" % e
+        self.q.put(("term", out))
 
 
 # --------------------------------------------------------------------- 界面
@@ -637,19 +962,18 @@ class App:
         ttk.Combobox(g2, textvariable=self.var_stretch, values=labels(STRETCH_CHOICES), width=17,
                      state="readonly", font=MONO_S).grid(row=0, column=3, sticky="w", padx=(10, 0))
 
-        c, b = self._card(right, "预览（还没保存的改动也能先看到）")
+        c, b = self._card(right, "预览终端（点一下就能打字，回车执行命令）")
         c.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        # 图是 520x292，居中显示；底色用卡片色 + 细边，两边不会出现硬邦邦的黑边
-        self.lbl_preview = tk.Label(b, text="正在生成预览…", bg=CARD2, fg=DIM,
-                                    font=MONO_S, width=52, height=13,
-                                    highlightthickness=1, highlightbackground=LINE)
-        self.lbl_preview.pack(fill="x")
+        # 背景是渲染出来的图（壁纸/磨砂/透明度/背景图），文字层由 Tk 画，所以可以打字
+        self.term = TermView(b, self, height=292)
+        self.term.canvas.pack(fill="x")
         self.lbl_prev_info = tk.Label(b, text="", bg=CARD, fg=DIM, font=MONO_S, anchor="w")
         self.lbl_prev_info.pack(fill="x", pady=(4, 0))
+        tk.Label(b, text="直接输入 PowerShell 命令：回车执行、↑↓ 翻历史、cls 清屏、Ctrl+C 取消当前行",
+                 bg=CARD, fg=DIM, font=MONO_S, anchor="w").pack(fill="x")
         self.lbl_cur = tk.Label(b, text="", bg=CARD, fg=DIM, font=MONO_S, anchor="w",
                                 wraplength=500, justify="left")
         self.lbl_cur.pack(fill="x")
-        self._preview_img = None
         self._preview_job = None
         self._preview_seq = 0
 
@@ -718,7 +1042,19 @@ class App:
     def _render_preview(self):
         self._preview_job = None
         if not self.tool:
-            self.lbl_preview.configure(text="找不到 terminal-setup.cmd", image="")
+            self.term.show_error("找不到 terminal-setup.cmd")
+            return
+        try:
+            payload = extract_payload(self.tool)
+        except Exception as e:  # noqa: BLE001
+            self.term.show_error("读不到工具里的预览载荷：%s" % e)
+            return
+        if "WT_PREVIEW_NOTEXT" not in payload:
+            self.term.show_error("这个 terminal-setup.cmd 还是旧版，不会只画背景。\n"
+                                 "重新运行一次 install.exe 升级到 v1.1.2 以上，预览终端才能写字。")
+            return
+        if not powershell_exe():
+            self.term.show_error("找不到 powershell.exe，没法生成预览背景")
             return
         self._preview_seq += 1
         seq = self._preview_seq
@@ -729,29 +1065,19 @@ class App:
         except Exception:
             pass
         st = self._state()
-        # 按预览卡的实际宽度出图，铺满卡片（高度固定 292，比例像真实终端）
+        self.term.set_theme(st)             # 字体/配色先跟上，文字立刻变
+        # 按终端卡片的实际宽度出图（高度固定 292，比例像真实终端）
         try:
-            pw = int(self.lbl_preview.winfo_width()) - 4
+            pw = int(self.term.canvas.winfo_width()) - 4
         except Exception:  # noqa: BLE001
             pw = 520
         if pw < 320:
             pw = 520
-        ph = 292
-        self.lbl_prev_info.configure(text="正在生成预览 . . .")
+        ph = self.term.height
+        self.lbl_prev_info.configure(text="正在生成背景 . . .")
 
         def work():
-            rc, dt = render_preview_direct(self.tool, st, out, pw, ph)
-            if rc is None:      # 直跑载荷不可用：退回走命令行（慢一点，但一定有图）
-                t0 = time.time()
-                try:
-                    p = subprocess.run([self.tool, "-preview", out] + build_apply_args(st),
-                                       capture_output=True, cwd=os.path.dirname(self.tool),
-                                       creationflags=0x08000000, timeout=180)
-                    rc = 0 if os.path.isfile(out) else (p.returncode or 1)
-                except Exception as e:  # noqa: BLE001
-                    rc = -1
-                    self.q.put(("line", f"预览失败: {e}"))
-                dt = time.time() - t0
+            rc, dt = render_preview_direct(self.tool, st, out, pw, ph, notext=True)
             self.q.put(("preview", (seq, rc, out, st, dt)))
 
         threading.Thread(target=work, daemon=True).start()
@@ -761,17 +1087,9 @@ class App:
         if seq != self._preview_seq:
             return              # 有更新的预览在生成，丢掉这次结果
         if rc == 0 and os.path.isfile(path):
-            try:
-                img = tk.PhotoImage(file=path)
-                self._preview_img = img
-                # width/height 是"字符数"，不归零的话图片会被裁成一条细缝
-                self.lbl_preview.configure(image=img, text="", width=0, height=0)
-            except Exception as e:  # noqa: BLE001
-                self.lbl_preview.configure(text=f"预览加载失败：{e}", image="",
-                                           width=52, height=13)
+            self.term.set_background(path)
         else:
-            self.lbl_preview.configure(text=f"预览生成失败（rc={rc}）\n{path}", image="",
-                                       width=52, height=13)
+            self.term.show_error("背景生成失败（rc=%s）" % rc)
         bg = "无"
         if st["bg_enabled"]:
             bg = "有" if st["bg_path"] else "未选"
@@ -1011,6 +1329,9 @@ class App:
                 kind, payload = self.q.get_nowait()
                 if kind == "preview":
                     self._apply_preview(payload)
+                    continue
+                if kind == "term":
+                    self.term.finish_command(payload)
                     continue
                 if kind == "line":
                     if payload.strip():
