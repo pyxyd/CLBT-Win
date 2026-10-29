@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 rem  ====================================================================
 rem   CLBT - Windows command line beautifier (single file with fonts)
 rem
@@ -53,6 +53,8 @@ set "WT_AA="
 set "WT_BGALIGN="
 set "WT_BGOPACITY="
 set "WT_BGSTRETCH="
+set "WT_UPDATE_CHECK="
+set "WT_UPDATE_JSON="
 set "WT_RC=0"
 
 :parse
@@ -77,6 +79,7 @@ if /i "%~1"=="-gui" goto :arg_gui
 if /i "%~1"=="-preview" goto :arg_preview
 if /i "%~1"=="-diagnose" goto :arg_diag
 if /i "%~1"=="-doctor" goto :arg_diag
+if /i "%~1"=="-update" goto :arg_update
 if /i "%~1"=="--install-fonts" goto :arg_ifonts
 if /i "%~1"=="-opacity" goto :arg_opacity
 if /i "%~1"=="--opacity" goto :arg_opacity
@@ -169,6 +172,13 @@ goto :parse
 
 :arg_diag
 set "WT_MODE=diag"
+goto :launch
+
+:arg_update
+set "WT_MODE=update"
+if /i "%~2"=="check" set "WT_UPDATE_CHECK=1"
+if /i "%~2"=="json" set "WT_UPDATE_JSON=1"
+shift
 goto :launch
 
 :arg_gui
@@ -315,6 +325,10 @@ try { $__oldTitle = $Host.UI.RawUI.WindowTitle } catch { }
 try { $Host.UI.RawUI.WindowTitle = 'Windows 命令行美化工具' } catch { }
 
 $MARK_FONTS = ('#::' + 'FONTS' + '::')   # 拼接构造：正文里不能出现字面量
+
+# 版本号由 build_package.py 从 version.json 注入（发版时唯一版本源）
+$CLBT_VERSION = '@@VERSION@@'
+$CLBT_REPO = 'pyxyd/CLBT-Win'
 
 function Read-Answer {
     # 交互菜单专用：stdin 被重定向/关闭时直接取消，绝不能当成「空回车 = 默认值」
@@ -748,6 +762,137 @@ function Render-Preview([string]$OutPath) {
     $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
     Write-Host ("  预览已生成: " + $OutPath + "  (" + $W + "x" + $H + ")") -ForegroundColor DarkGray
+}
+
+# =====================================================================
+# 自动更新：查 GitHub 最新 release -> 下载 CLBT.zip -> 校验 -> 拉起安装器
+# =====================================================================
+
+function Get-VerNum([string]$v) {
+    # "1.1.2" / "v1.1.2" -> @(1,1,2)；解析不了的部分当 0
+    $p = ("$v" -replace '^[vV]', '').Split('.')
+    $out = @(0, 0, 0)
+    for ($i = 0; $i -lt 3 -and $i -lt $p.Count; $i++) {
+        $n = 0
+        if ([int]::TryParse($p[$i], [ref]$n)) { $out[$i] = $n }
+    }
+    return $out
+}
+
+function Test-NewerVersion([string]$candidate, [string]$current) {
+    # 版本号是 15 进制进位，但 (大,中,小) 按数字比较依然单调递增，直接比大小就行
+    $a = Get-VerNum $candidate
+    $b = Get-VerNum $current
+    for ($i = 0; $i -lt 3; $i++) {
+        if ($a[$i] -gt $b[$i]) { return $true }
+        if ($a[$i] -lt $b[$i]) { return $false }
+    }
+    return $false
+}
+
+function Get-LatestRelease {
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+    $headers = @{ 'User-Agent' = 'CLBT-Win'; 'Accept' = 'application/vnd.github+json' }
+    $uri = 'https://api.github.com/repos/' + $CLBT_REPO + '/releases/latest'
+    $r = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 30 -ErrorAction Stop
+    $tag = ("$($r.tag_name)" -replace '^[vV]', '')
+    $zip = $null
+    foreach ($a in @($r.assets)) { if ($a.name -eq 'CLBT.zip') { $zip = $a; break } }
+    $url = ''
+    $size = [int64]0
+    $digest = ''
+    if ($zip) {
+        $url = "$($zip.browser_download_url)"
+        $size = [int64]$zip.size
+        if ($zip.PSObject.Properties.Name -contains 'digest') { $digest = "$($zip.digest)" }
+    }
+    return [pscustomobject]@{
+        Latest = $tag
+        Page   = "$($r.html_url)"
+        Url    = $url
+        Size   = $size
+        Digest = $digest
+    }
+}
+
+function Invoke-CLBTUpdate([switch]$CheckOnly, [switch]$Json) {
+    # -Json：给图形界面用，只吐一行 JSON，别的什么都不打印
+    $cur = $CLBT_VERSION
+    try {
+        $rel = Get-LatestRelease
+    }
+    catch {
+        $msg = ($_.Exception.Message -replace '"', "'" -replace '\r|\n', ' ')
+        if ($Json) { Write-Output ('{"error":"' + $msg + '"}'); return }
+        Write-Host ''
+        Write-Host ('  检查更新失败: ' + $msg) -ForegroundColor Red
+        Write-Host '  常见原因：没联网、公司网络挡了 api.github.com、或者 GitHub 暂时不可用。' -ForegroundColor DarkGray
+        Write-Host ''
+        throw
+    }
+    $newer = Test-NewerVersion $rel.Latest $cur
+    if ($Json) {
+        # 注意：PowerShell 变量名不区分大小写，这里不能叫 $json —— 会和 [switch]$Json 撞车
+        $jsonText = '{"current":"' + $cur + '","latest":"' + $rel.Latest +
+                    '","newer":' + $newer.ToString().ToLower() +
+                    ',"url":"' + $rel.Url + '","size":' + $rel.Size +
+                    ',"digest":"' + $rel.Digest + '"}'
+        Write-Output $jsonText
+        return
+    }
+
+    Write-Host ''
+    Write-Host ('  当前版本: ' + $cur) -ForegroundColor Gray
+    Write-Host ('  最新版本: ' + $rel.Latest) -ForegroundColor Gray
+    if (-not $newer) {
+        Write-Host '  已经是最新的了，不用更新。' -ForegroundColor Green
+        Write-Host ''
+        return
+    }
+    Write-Host ('  有新版本: ' + $cur + '  ->  ' + $rel.Latest) -ForegroundColor Yellow
+    if ($CheckOnly) {
+        Write-Host '  运行  CLBT -update  下载并安装。' -ForegroundColor Gray
+        Write-Host ''
+        return
+    }
+    if (-not $rel.Url) { throw '这个版本没有提供 CLBT.zip 资产' }
+
+    $zip = Join-Path $env:TEMP ('clbt_update_' + $rel.Latest + '.zip')
+    $dir = Join-Path $env:TEMP ('clbt_update_' + $rel.Latest)
+    Write-Host ('  正在下载 ' + ('{0:N1}' -f ($rel.Size / 1MB)) + ' MB ...') -ForegroundColor Gray
+    $old = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'      # 自带进度条会让 46MB 的下载慢好几倍
+    try {
+        Invoke-WebRequest -Uri $rel.Url -OutFile $zip -UseBasicParsing -TimeoutSec 900 -ErrorAction Stop
+    }
+    finally { $ProgressPreference = $old }
+
+    $got = (Get-Item -LiteralPath $zip).Length
+    if ($rel.Size -gt 0 -and $got -ne $rel.Size) {
+        throw ('下载不完整：' + $got + ' / ' + $rel.Size + ' 字节')
+    }
+    if ($rel.Digest -and $rel.Digest.StartsWith('sha256:')) {
+        $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+        if ($hash -ne $rel.Digest.Substring(7).ToLower()) {
+            throw '下载校验失败（sha256 对不上），已放弃安装'
+        }
+        Write-Host '  sha256 校验通过' -ForegroundColor Green
+    }
+
+    if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
+    $inst = Join-Path $dir 'CLBT\install.exe'
+    if (-not (Test-Path -LiteralPath $inst)) { $inst = Join-Path $dir 'install.exe' }
+    if (-not (Test-Path -LiteralPath $inst)) { throw '压缩包里找不到 install.exe' }
+
+    # 本进程是从 terminal-setup.cmd 里读出来跑的，那个文件正被 cmd 占着；
+    # 等 4 秒让批处理退干净，再让安装器去覆盖它
+    $line = 'timeout /t 4 >nul & "' + $inst + '" --no-pause'
+    Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $launchLine) -WindowStyle Normal | Out-Null
+    Write-Host ''
+    Write-Host '  下载完成，马上弹出安装窗口（可能要过一次 UAC，点是）。' -ForegroundColor Green
+    Write-Host '  装完重新打开终端 / 图形界面，就是新版本了。' -ForegroundColor Gray
+    Write-Host ''
 }
 
 # =====================================================================
@@ -1971,6 +2116,7 @@ function Get-CurrentStyle {
 function Show-CliHelp {
     Write-Host ''
     Write-Host '  || Windows 命令行 美化工具 ||' -ForegroundColor Cyan
+    Write-Host ('  版本 ' + $CLBT_VERSION + '   ·   CLBT -update 可检查更新') -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '  用法：' -ForegroundColor White
     Write-Host '    CLBT                          交互式菜单（首次使用推荐）' -ForegroundColor Gray
@@ -1997,6 +2143,8 @@ function Show-CliHelp {
     Write-Host '    CLBT -gui                    打开图形界面（等同于双击 CLBT-GUI.exe）' -ForegroundColor Gray
     Write-Host '    CLBT -diagnose               环境诊断：设置写到了哪、当前窗口是谁在渲染' -ForegroundColor Gray
     Write-Host '    CLBT -preview "<输出.png>"     按当前参数渲染一张模拟终端预览图（不写设置）' -ForegroundColor Gray
+    Write-Host '    CLBT -update                 自动更新：查最新版、下载、校验、拉起安装器' -ForegroundColor Gray
+    Write-Host '    CLBT -update check           只检查有没有新版（不下载）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive                开启自适应前景色（透明时按背景明暗切字体深浅）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive off            关闭自适应前景色' -ForegroundColor Gray
     Write-Host '    CLBT -uninstall               撤回对命令行的修改（外观/提示符/cmd 挂钩还原）' -ForegroundColor Gray
@@ -2086,6 +2234,17 @@ if ($env:WT_MODE -eq 'uninstall') {
     }
 }
 
+
+if ($env:WT_MODE -eq 'update') {
+    try {
+        Invoke-CLBTUpdate -CheckOnly:([bool]$env:WT_UPDATE_CHECK) -Json:([bool]$env:WT_UPDATE_JSON)
+        exit 0
+    }
+    catch {
+        if ($env:WT_UPDATE_JSON) { exit 1 }
+        exit 1
+    }
+}
 
 if ($env:WT_MODE -eq 'diag') {
     Write-Host ''

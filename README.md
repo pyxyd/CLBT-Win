@@ -79,6 +79,8 @@ CLBT -encoding on|off                  让 cmd 标签以 UTF-8 启动（消除 b
 CLBT -gui                              打开图形界面（等价双击 CLBT-GUI.exe）
 CLBT -preview "D:\shot.png"            先在 PNG 里看效果，不写任何设置（可叠加其它参数）
 CLBT -diagnose                         环境诊断：设置写到了哪、当前窗口由谁渲染
+CLBT -update                           自动更新：查最新版、下载、校验、拉起安装器
+CLBT -update check                     只检查有没有新版（不下载）
 CLBT -uninstall                        撤回对命令行的全部修改
 CLBT -help                             显示帮助
 ```
@@ -180,6 +182,28 @@ CLBT -preview "D:\shot.png" -face "0xProto Nerd Font Mono" -font-weight bold
 
 背景和文字是分开的：渲染器加 `WT_PREVIEW_NOTEXT=1` 只画「壁纸 → 磨砂 → 终端底色 →
 背景图」这几层，文字层由界面的 `Canvas` 自己画 —— 所以文字才编辑得动。
+
+## 自动更新
+
+工具自己知道版本号，能从 GitHub 直接升级，不用重新下载压缩包。
+
+```bat
+CLBT -update           :: 查最新版 → 下载 → 校验 sha256 → 拉起安装器
+CLBT -update check     :: 只检查有没有新版
+```
+
+图形界面里更省事：右下角「检查更新」（**打开界面时也会静默查一次**）。发现新版后按钮会变成
+黄色的「⬆ 更新到 v1.1.4」，点一下就是完整流程：
+
+1. 后台下载 `CLBT.zip`，日志区显示进度
+2. 校验文件大小 + sha256（GitHub API 给的 digest）
+3. 自动关闭界面 → 运行安装器（装到 Program Files 会弹一次 UAC）→ 装完自动把界面重新打开
+
+细节：
+
+- 安装器会先把旧的 `terminal-setup.cmd` 备份成 `.bak`，装失败还能退回去
+- 图形界面正开着的时候不会被覆盖：安装器会等它退出（点更新后是界面自己先关掉再装）
+- 检查更新只用 `api.github.com`，不偷传任何本机信息
 
 ## 它会修改什么（透明披露）
 

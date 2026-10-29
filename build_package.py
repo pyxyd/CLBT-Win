@@ -20,6 +20,7 @@
 """
 import base64
 import hashlib
+import json
 import os
 import sys
 
@@ -27,9 +28,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "terminal-setup.src.cmd")
 OUT = os.path.join(HERE, "terminal-setup.cmd")
 ITALIC_DIR = os.path.join(HERE, "italic-family")
+VERSION_FILE = os.path.join(HERE, "version.json")
 
 PS1_MARK = "#::PS1::"
 FONT_MARK = "#::FONTS::"
+VERSION_TOKEN = "@@VERSION@@"
 LINE_WIDTH = 76
 
 # 配置文件里实际引用的字体族（拆包时优先保证它在）
@@ -102,6 +105,17 @@ def main():
     if not fonts:
         sys.exit("没有找到任何 .ttf 字体文件")
 
+    # 版本号注入：模板里写 $CLBT_VERSION = '@@VERSION@@'，这里换成 version.json 的值
+    try:
+        with open(VERSION_FILE, "r", encoding="utf-8") as f:
+            vj = json.load(f)
+        version = "%d.%d.%d" % (vj["major"], vj["middle"], vj["minor"])
+    except Exception as e:  # noqa: BLE001
+        sys.exit(f"读不到版本号（{VERSION_FILE}）: {e}")
+    if VERSION_TOKEN not in template:
+        sys.exit(f"模板里找不到版本占位符 {VERSION_TOKEN}")
+    template = template.replace(VERSION_TOKEN, version)
+
     parts = [template, FONT_MARK, "\n"]
     total_raw = 0
     total_b64 = 0
@@ -132,6 +146,7 @@ def main():
 
     size = os.path.getsize(OUT)
     print(f"已生成: {OUT}")
+    print(f"  版本号: {version}")
     print(f"  字体数: {len(fonts)}   原始合计: {total_raw/1048576:.2f} MB   base64: {total_b64/1048576:.2f} MB")
     print(f"  产物大小: {size/1048576:.2f} MB")
     print("  已内嵌字体:")

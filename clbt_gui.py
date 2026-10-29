@@ -15,6 +15,7 @@ CLBT 图形界面（tkinter）
 依赖：Python 3.8+ 自带的 tkinter，不需要第三方库。
 """
 
+import hashlib
 import json
 import os
 import queue
@@ -25,11 +26,13 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import urllib.request
+import zipfile
 from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -280,13 +283,12 @@ def ttf_family(path):
 
 
 def preview_env(st, out_path, width=520, height=0, notext=False):
-    """界面状态 -> 预览用的环境变量（Render-Preview 认的就是这套 WT_*）"""
-    env = dict(os.environ)
-    for k in _OUR_ENV:
-        env.pop(k, None)
-    env["WT_MODE"] = "preview"
-    env["WT_PREVIEW_OUT"] = out_path
-    env["WT_PREVIEW_W"] = str(int(width))
+    """界面状态 -> 预览用的环境变量覆盖（Render-Preview 认的就是这套 WT_*）"""
+    env = {
+        "WT_MODE": "preview",
+        "WT_PREVIEW_OUT": out_path,
+        "WT_PREVIEW_W": str(int(width)),
+    }
     if height:
         env["WT_PREVIEW_H"] = str(int(height))
     if notext:
@@ -315,39 +317,131 @@ def preview_env(st, out_path, width=520, height=0, notext=False):
     return env
 
 
-def render_preview_direct(tool_path, st, out_path, width=520, height=0, notext=False):
-    """直接跑内嵌载荷出图：绕开 cmd 逐行扫描 33MB 文件的 3 秒开销。
-    返回 (rc, 秒数)；返回 (None, 0) 表示这条路用不了，调用方退回走 -preview。"""
+def run_payload(tool_path, extra_env, timeout=60):
+    """不用 cmd，直接跑内嵌的 PowerShell 载荷（快、不弹控制台）。
+    返回 (rc, 输出文本)；rc 为 None 表示这条路走不通。"""
     ps = powershell_exe()
     if not ps:
-        return None, 0.0
+        return None, "找不到 powershell.exe"
     try:
         code = extract_payload(tool_path)
-    except Exception:  # noqa: BLE001
-        return None, 0.0
-    tmp = os.path.join(tempfile.gettempdir(), "clbt_prev_%d.ps1" % os.getpid())
-    t0 = time.time()
+    except Exception as e:  # noqa: BLE001
+        return None, str(e)
+    tmp = os.path.join(tempfile.gettempdir(), "clbt_run_%d.ps1" % os.getpid())
     try:
         # newline="" 保持载荷里的 CRLF 原样；utf-8-sig 是因为载荷里有中文注释
         with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
             f.write(code)
+        env = dict(os.environ)
+        for k in _OUR_ENV:
+            env.pop(k, None)
+        env.setdefault("WT_SELF", tool_path)
+        env.update(extra_env)
         p = subprocess.run(
             [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tmp],
             capture_output=True, cwd=os.path.dirname(tool_path) or None,
-            creationflags=0x08000000, env=preview_env(st, out_path, width, height, notext),
-            timeout=60)
+            creationflags=0x08000000, env=env, timeout=timeout,
+            stdin=subprocess.DEVNULL)      # 万一载荷掉进交互菜单，别让它等输入卡死
+        out = (p.stdout + p.stderr).decode("utf-8", "replace")
+        return p.returncode, out
     finally:
         try:
             os.remove(tmp)
         except Exception:  # noqa: BLE001
             pass
+
+
+def render_preview_direct(tool_path, st, out_path, width=520, height=0, notext=False):
+    """渲染一张预览图；返回 (rc, 秒数)。rc 为 None 表示这条路用不了。"""
+    t0 = time.time()
+    rc, _out = run_payload(tool_path, preview_env(st, out_path, width, height, notext), timeout=60)
     dt = time.time() - t0
+    if rc is None:
+        return None, dt
     if os.path.isfile(out_path):
         return 0, dt
-    return (p.returncode or 1), dt
+    return (rc or 1), dt
+
+
+# --------------------------------------------------------------------- 自动更新
+
+GITHUB_RELEASES = "https://github.com/pyxyd/CLBT-Win/releases"
+
+
+def download_update(info, log=None):
+    """把最新版的 CLBT.zip 下下来、校验 sha256、解开，返回 install.exe 的路径"""
+    url = info.get("url") or ""
+    if not url:
+        raise RuntimeError("这个版本没有 CLBT.zip")
+    latest = info.get("latest") or "new"
+    size = int(info.get("size") or 0)
+    dest = os.path.join(tempfile.gettempdir(), "clbt_update_%s.zip" % latest)
+    if log:
+        log("  下载 %.1f MB …" % (size / 1048576.0))
+    req = urllib.request.Request(url, headers={"User-Agent": "CLBT-GUI"})
+    got = 0
+    with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
+        while True:
+            chunk = r.read(1 << 18)
+            if not chunk:
+                break
+            f.write(chunk)
+            got += len(chunk)
+            if log and size:
+                pct = got * 100 // size
+                if pct % 25 == 0 and pct:
+                    log("  已下载 %d%%" % pct)
+    if size and got != size:
+        raise RuntimeError("下载不完整（%d / %d 字节）" % (got, size))
+    digest = (info.get("digest") or "").split(":", 1)[-1].strip().lower()
+    if digest:
+        h = hashlib.sha256()
+        with open(dest, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        if h.hexdigest() != digest:
+            raise RuntimeError("sha256 校验失败，已放弃安装")
+        if log:
+            log("  sha256 校验通过")
+    outdir = os.path.join(tempfile.gettempdir(), "clbt_update_%s" % latest)
+    shutil.rmtree(outdir, ignore_errors=True)
+    with zipfile.ZipFile(dest) as z:
+        z.extractall(outdir)
+    for cand in (os.path.join(outdir, "CLBT", "install.exe"),
+                 os.path.join(outdir, "install.exe")):
+        if os.path.isfile(cand):
+            return cand
+    raise RuntimeError("压缩包里找不到 install.exe")
 
 
 # --------------------------------------------------------------------- 迷你终端
+
+def decode_console(data):
+    """控制台输出可能是 UTF-8，也可能是系统 ANSI（中文 Windows 上是 GBK）：
+    整段先按 UTF-8 试，失败就逐行挑一个能解开的编码，避免中文变问号。"""
+    if not data:
+        return ""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    lines = []
+    for raw in data.split(b"\n"):
+        row = raw.rstrip(b"\r")
+        try:
+            lines.append(row.decode("utf-8"))
+            continue
+        except UnicodeDecodeError:
+            pass
+        for enc in ("cp936", "cp850", "latin-1"):
+            try:
+                lines.append(row.decode(enc))
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        else:
+            lines.append(row.decode("utf-8", "replace"))
+    return "\n".join(lines)
 
 # 和 terminal-setup.cmd 里预览渲染用的两套配色保持一致
 TERM_PALETTES = {
@@ -356,8 +450,7 @@ TERM_PALETTES = {
     "win": {"fg": "#CCCCCC", "dim": "#8A8A8A", "green": "#CCCCCC", "blue": "#CCCCCC",
             "cyan": "#CCCCCC", "yellow": "#FCE94F", "red": "#E06C75", "bg": "#0C0C0C"},
 }
-CJK_FAMILIES = ("Microsoft YaHei UI", "Microsoft YaHei", "SimSun")
-# 这些区段交给等宽字体（Nerd Font 图标、箭头、制表符都在里面），其余非 ASCII 交回 CJK 字体
+CJK_FAMILIES = ("Microsoft YaHei UI", "Microsoft YaHei", "SimSun")# 这些区段交给等宽字体（Nerd Font 图标、箭头、制表符都在里面），其余非 ASCII 交回 CJK 字体
 MONO_RANGES = ((0x2000, 0x27BF), (0xE000, 0xF8FF), (0xF0000, 0x10FFFD))
 
 
@@ -666,20 +759,39 @@ class TermView:
 
     def _run(self, line):
         ps = powershell_exe()
+        tmp = None
         try:
             if ps:
-                cmd = [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                       "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + line]
+                # 先把命令写进临时 .ps1，再用 chcp 65001 起 powershell：
+                #  - 命令里带引号/竖线/& 不会被 cmd 二次解析
+                #  - powershell 一启动控制台就是 UTF-8，连"解析错误"这种由宿主打印的
+                #    中文也不会变成乱码
+                tmp = os.path.join(tempfile.gettempdir(), "clbt_cmd_%d.ps1" % os.getpid())
+                with open(tmp, "w", encoding="utf-8-sig", newline="\r\n") as f:
+                    f.write("[Console]::OutputEncoding = [Text.Encoding]::UTF8\r\n")
+                    f.write(line + "\r\n")
+                inner = ('chcp 65001>nul & "%s" -NoProfile -NonInteractive '
+                         '-ExecutionPolicy Bypass -File "%s"' % (ps, tmp))
+                # 这里必须传"一整条字符串"：传 list 的话 Python 会把内层引号转义成 \"，
+                # cmd 不认识这种转义，会当成一个叫 \"C:\...\" 的命令
+                cmd = "cmd /c " + inner
             else:
-                cmd = ["cmd", "/c", "chcp 65001>nul & " + line]
-            p = subprocess.run(cmd, capture_output=True, creationflags=0x08000000, timeout=120)
-            out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
+                cmd = "cmd /c chcp 65001>nul & " + line
+            p = subprocess.run(cmd, capture_output=True, creationflags=0x08000000,
+                               timeout=120, stdin=subprocess.DEVNULL)
+            out = decode_console((p.stdout or b"") + (p.stderr or b""))
             if not out.strip():
                 out = "（没有输出，返回码 %d）" % p.returncode
         except subprocess.TimeoutExpired:
             out = "（超时：命令跑了 120 秒还没结束）"
         except Exception as e:  # noqa: BLE001
             out = "（执行失败：%s）" % e
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except Exception:  # noqa: BLE001
+                    pass
         self.q.put(("term", out))
 
 
@@ -764,6 +876,8 @@ class App:
         self.root.after(120, self._dark_titlebar)
         # 开窗后把焦点直接给预览终端：打开就能打字，不用先点一下
         self.root.after(700, self.term.focus)
+        # 静默查一次更新：有新版就把右下角按钮变成「⬆ 更新到 vX」
+        self.root.after(2500, lambda: self._check_update(silent=True))
         if not self.tool:
             self.log("找不到 terminal-setup.cmd —— 请先运行 install.exe 安装。", "err")
 
@@ -993,6 +1107,8 @@ class App:
         self.lbl_cur.pack(fill="x")
         self._preview_job = None
         self._preview_seq = 0
+        self.update_busy = False
+        self.update_info = None
 
         c, b = self._card(right, "输出")
         c.grid(row=2, column=0, sticky="nsew")
@@ -1034,6 +1150,9 @@ class App:
         diag = self._btn(acts, "环境诊断", self._diagnose, bg=CARD, fg=CYAN)
         diag.pack(side="right", padx=(0, 8))
         self._btn(acts, "清空日志", self._clear_log, bg=CARD, fg=DIM).pack(side="right")
+        self.btn_update = self._btn(acts, "检查更新", self._on_update_click, bg=CARD, fg=BLUE)
+        self.btn_update.pack(side="right", padx=(0, 8))
+        self.action_buttons.append(self.btn_update)
 
         # 任何控件一改就提示「有未保存的改动」
         for var in (self.var_style, self.var_transp, self.var_enc, self.var_adapt,
@@ -1117,6 +1236,132 @@ class App:
             text=f"{style} · 不透明度 {100 - st['transparent']}% · 亚克力{acr} · "
                  f"背景图 {bg}（浓淡 {st['bg_opacity']:.2f}）· {face} / {self.var_weight.get()}"
                  f"　·　{dt:.1f}s")
+
+    # ---------------- 自动更新
+    def _on_update_click(self):
+        if self.update_info and self.update_info.get("newer"):
+            self._start_update()
+        else:
+            self._check_update()
+
+    def _check_update(self, silent=False):
+        if self.update_busy:
+            return
+        if not self.tool:
+            if not silent:
+                messagebox.showerror(APP_TITLE, "找不到 terminal-setup.cmd，没法检查更新。")
+            return
+        self.update_busy = True
+        self.btn_update.configure(text="检查中…", state="disabled")
+        if not silent:
+            self.log("$ CLBT -update check", "cmd")
+
+        def work():
+            try:
+                if "WT_UPDATE_JSON" not in extract_payload(self.tool):
+                    self.q.put(("update_info", (None, "这个 terminal-setup.cmd 还是旧版，"
+                                                      "不认识 -update。重新运行 install.exe 升级一次", silent)))
+                    return
+            except Exception as e:  # noqa: BLE001
+                self.q.put(("update_info", (None, "读不到工具里的载荷：%s" % e, silent)))
+                return
+            rc, out = run_payload(self.tool, {"WT_MODE": "update", "WT_UPDATE_JSON": "1"},
+                                  timeout=90)
+            info, err = None, None
+            if rc is None:
+                err = out or "无法运行内置脚本"
+            else:
+                for line in (out or "").splitlines():
+                    s = line.strip()
+                    if s.startswith("{") and s.endswith("}"):
+                        try:
+                            info = json.loads(s)
+                        except Exception:  # noqa: BLE001
+                            info = None
+                if info is None:
+                    tail = (out or "").strip().replace("\r", "")
+                    err = "拿不到更新信息：" + (tail[-200:] if tail else "脚本没输出（rc=%s）" % rc)
+            self.q.put(("update_info", (info, err, silent)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_info(self, info, err, silent):
+        self.update_busy = False
+        if err or not info or info.get("error"):
+            msg = err or (info or {}).get("error") or "未知错误"
+            self.btn_update.configure(text="检查更新", state="normal", bg=CARD, fg=BLUE)
+            if not silent:
+                self.log("  检查更新失败: " + msg, "err")
+            return
+        self.update_info = info
+        cur, latest = info.get("current"), info.get("latest")
+        if info.get("newer"):
+            self.log("  发现新版本 v%s（当前 v%s）" % (latest, cur), "warn")
+            self.log("  点右下角「⬆ 更新到 v%s」即可：会自动下载、校验、关界面、装完再打开" % latest,
+                     "dim")
+            self.btn_update.configure(text="⬆ 更新到 v%s" % latest, state="normal",
+                                      bg=YELLOW, fg="#3A2A00")
+        else:
+            if not silent:
+                self.log("  已经是最新版本 v%s" % cur, "ok")
+            self.btn_update.configure(text="✓ v%s 已最新" % cur, state="normal", bg=CARD, fg=GREEN)
+
+    def _start_update(self):
+        info = self.update_info or {}
+        latest = info.get("latest") or "?"
+        if not info.get("newer"):
+            return
+        if self.dirty:
+            messagebox.showinfo(APP_TITLE, "还有没保存的改动。\n\n"
+                                          "先点「💾 保存设置」（或者放弃改动），再更新。")
+            return
+        if not messagebox.askyesno(APP_TITLE,
+                                   "更新到 v%s？\n\n会关闭这个界面，安装完自动重新打开。\n"
+                                   "（装到 Program Files 的话会弹一次 UAC，点是）" % latest):
+            return
+        self.update_busy = True
+        self.btn_update.configure(text="下载中…", state="disabled")
+        self.log("  正在下载 v%s …" % latest, "dim")
+
+        def work():
+            try:
+                inst = download_update(info, log=lambda s: self.q.put(("line", s)))
+                self.q.put(("update_ready", inst))
+            except Exception as e:  # noqa: BLE001
+                self.q.put(("update_failed", str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_ready(self, inst):
+        self.update_busy = False
+        gui = os.path.join(app_dir(), "CLBT-GUI.exe")
+        helper = os.path.join(tempfile.gettempdir(), "clbt_update_run.cmd")
+        try:
+            with open(helper, "w", encoding="utf-8", newline="\r\n") as f:
+                f.write("@echo off\r\n")
+                f.write("timeout /t 3 >nul\r\n")
+                f.write('"%s" --no-pause\r\n' % inst)
+                f.write('if exist "%s" start "" "%s"\r\n' % (gui, gui))
+                f.write('del "%~f0" >nul 2>&1\r\n')
+        except Exception as e:  # noqa: BLE001
+            self.log("  写升级脚本失败: %s" % e, "err")
+            self.btn_update.configure(text="检查更新", state="normal", bg=CARD, fg=BLUE)
+            return
+        self.log("  下载完成，正在关闭界面并安装 …", "ok")
+        try:
+            subprocess.Popen(["cmd", "/c", helper],
+                             creationflags=0x00000008 | 0x08000000, close_fds=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:  # noqa: BLE001
+            self.log("  启动安装脚本失败: %s" % e, "err")
+            return
+        self.root.destroy()
+
+    def _on_update_failed(self, msg):
+        self.update_busy = False
+        self.btn_update.configure(text="检查更新", state="normal", bg=CARD, fg=BLUE)
+        self.log("  更新失败: " + msg, "err")
+        messagebox.showerror(APP_TITLE, "更新失败：\n" + msg)
 
     # ---------------- 未保存状态
     def _mark_dirty(self, *_args):
@@ -1349,6 +1594,15 @@ class App:
                     continue
                 if kind == "term":
                     self.term.finish_command(payload)
+                    continue
+                if kind == "update_info":
+                    self._on_update_info(*payload)
+                    continue
+                if kind == "update_ready":
+                    self._on_update_ready(payload)
+                    continue
+                if kind == "update_failed":
+                    self._on_update_failed(payload)
                     continue
                 if kind == "line":
                     if payload.strip():
