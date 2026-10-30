@@ -219,35 +219,37 @@ CLBT -import "D:\我的外观.json"
 ## 外观 JSON 的格式
 
 `CLBT -export` 导出的文件、`CLBT -profile save` 存的档案，**是同一种格式**（档案就是放在
-`profiles\` 目录里的同结构文件），可以直接用记事本打开改。
+`profiles\` 目录里的同结构文件），可以直接用记事本改。
 
-结构是**扁平的**：每一项就是 Terminal `profiles.defaults` 里的那个字段，没有嵌套的包装层：
+结构扁平、2 空格缩进，第一行是一句说明（`"//"` 是 JSON 里写注释的惯例，导入时忽略）：
 
 ```json
 {
+  "//": "CLBT 外观文件 —— 字段名就是 Terminal settings.json 里的名字；改完运行 CLBT -import 这个文件.json 生效",
   "style": "Linux (Tango)",
   "opacity": 36,
   "useAcrylic": true,
-  "font": { "face": "0xProto Mono Italic", "size": 12 },
+  "font": {
+    "face": "0xProto Mono Italic",
+    "size": 12
+  },
   "cursorShape": "filledBox",
-  "cursorBlink": false,
   "padding": "10, 8",
   "bellStyle": "none",
-  "scrollbarState": "hidden",
-  "antialiasingMode": "grayscale",
-  "adjustIndistinguishableColors": "always",
-  "backgroundImage": "C:\\Users\\你\\AppData\\Local\\WindowsCommandLineBeautify\\background_1af6dad0.png",
+  "backgroundImage": "my-look.bg.png",
   "backgroundImageOpacity": 0.7,
   "backgroundImageStretchMode": "uniformToFill",
-  "backgroundImageAlignment": "center",
-  "backgroundData": "<base64，可选：背景图本体>",
-  "backgroundName": "background_1af6dad0.png"
+  "backgroundImageAlignment": "center"
 }
 ```
 
-**这里故意不包含任何 Linux / Windows 风格的 16 色配色**：`style` 只是个配色方案的**名字**
-（`Linux (Tango)`、`Campbell`，或你自己在 Terminal 里建的名字），具体颜色交给 Terminal。
-只有 `Linux (Tango)` 这套是工具自带的 —— 导入时如果本机没有，会顺手补进 `schemes`。
+**背景图不塞进 JSON**（几 MB 的 base64 会让文件没法读）：导出时会放到**旁边的同名文件**
+`my-look.bg.png`，JSON 里只写这个文件名。发给别人时**两个文件一起给**（或者打包成 zip），
+导入时自动按内容哈希收进 `background_*.png`；旁图丢了也不报错，只提示一句「背景图找不到，已跳过」。
+
+**这里不含任何 Linux / Windows 风格的 16 色配色**：`style` 只是配色方案的**名字**
+（`Linux (Tango)`、`Campbell`，或你自己建的名字），颜色交给 Terminal。只有 `Linux (Tango)`
+是工具自带的，导入时本机没有会自动补进 `schemes`（`Campbell` 是 Terminal 自带的）。
 
 | 字段 | 类型 | 取值 |
 |---|---|---|
@@ -262,22 +264,20 @@ CLBT -import "D:\我的外观.json"
 | `scrollbarState` | 字符串 | `visible` / `hidden` |
 | `antialiasingMode` | 字符串 | `grayscale` / `cleartype` / `aliased` |
 | `adjustIndistinguishableColors` | 字符串 | `always` / `indexed` / `never` |
-| `backgroundImage` | 字符串 | 图片绝对路径；不要背景图就整行删掉 |
+| `backgroundImage` | 字符串 | 图片路径；**相对路径按 JSON 所在目录解析**，不要背景图就整行删掉 |
 | `backgroundImageOpacity` | 0–1 | 背景图浓淡 |
 | `backgroundImageStretchMode` | 字符串 | `fill` / `none` / `uniform` / `uniformToFill` |
 | `backgroundImageAlignment` | 字符串 | `center` / `top` / `bottom` / `left` / `right` / `topLeft` / … |
-| `backgroundData` | base64 | 可选，内嵌的背景图（≤12MB），换机也能还原 |
-| `backgroundName` | 字符串 | 可选，配 `backgroundData` 记原文件名 |
 
 几条规则：
 
 - **没写的字段 = 恢复 Terminal 默认**（保证"套用 = 一模一样"）。只想改一两项就只写一两项，
   但注意其余会被清掉；想保留原样就把导出的整段留着
 - 其余设置（`defaultProfile`、`actions`、各个 profile、别的配色）**完全不碰**
-- 空对象 `{}` 当成"没写"（老版本 bug 留下的残留会自动忽略并清掉）
-- 带着 `backgroundData` 就不需要原图存在 —— 导入时按内容哈希落回 `background_<hash>.png`
+- 空对象 `{}`、空字符串都当成"没写"
 - 文件用 UTF-8 存；手改后 `CLBT -import "路径.json"` 或 `CLBT -profile 名字` 生效
-- v1.1.6 以前的 `{ "app": "CLBT", "managed": {…}, "scheme": {…} }` 老格式**仍然能导入**
+- v1.1.6 以前那种 `{ "app": "CLBT", "managed": {…}, "scheme": {…}, "backgroundData": "<base64>" }`
+  老格式**仍然能导入**
 
 另外两个 JSON 不是这个格式：`version.json` 是仓库里的版本号（`{major, middle, minor}`），
 `settings.json` 是 Windows Terminal 自己的配置（本工具只改 `profiles.defaults` 里那十几个字段）。

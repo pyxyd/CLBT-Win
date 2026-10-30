@@ -1,5 +1,34 @@
 # 更新日志
 
+## v1.1.8
+
+### 外观 JSON 更好读
+
+三件事：
+
+1. **背景图不再塞进 JSON**：原来 6MB 的 base64 直接把文件变成"不可读"。现在导出成**旁边的
+   同名文件** `my-look.bg.png`，JSON 里只写这个文件名 —— 整份 JSON 只剩 **533 字节**。
+   发给别人时两个文件一起给；旁图丢了也只提示「背景图找不到，已跳过」，不影响其它设置。
+2. **排版重写成自己生成的**：2 空格缩进、冒号后一个空格、嵌套对象规规矩矩缩进
+   （PowerShell 5.1 的 `ConvertTo-Json` 是 4 空格 + 冒号后两空格 + 嵌套对不齐）。
+3. **第一行加了一句说明**：`"//": "CLBT 外观文件 —— 字段名就是 Terminal settings.json 里的名字；…"`
+   （`"//"` 是 JSON 里写注释的惯例，导入时当未知字段忽略）。
+
+### 顺带修的两个坑
+
+- **档案也自带旁图**：`-profile save work` 会把背景图放到 `profiles\work.bg.png`，
+  JSON 里写相对名 —— 整个 profiles 目录可以直接拷到别的机器。`-profile delete` 会连旁图一起删。
+- **背景图找不到时不再把坏路径写进 settings**：原来会把相对路径原样写进去，Terminal 指向一个
+  不存在的文件（表现为"背景图没了但设置里还在"）。现在提示后清掉该字段。
+
+### 验证
+
+- `-export` → `my-look.json`（533 B）+ `my-look.bg.png`（4.57 MB），JSON 用 `json.load` 校验通过
+- 导出 → `-win` → `-import`：背景图按内容哈希落回 `background_1af6dad0.png`，Tango/36%/斜体 12 全回来
+- `-profile save work` → `work.json`（528 B）+ `work.bg.png`；再 `-win` → `-profile work`：背景图与配色恢复
+- 删掉旁图再导入：提示「背景图找不到，已跳过」，其它设置照常应用
+- 手写 `{"style": "Campbell", "opacity": 88}` 仍可用；老的 base64 格式仍可导入
+
 ## v1.1.7
 
 ### 改：外观 JSON 换成扁平结构，不再内嵌配色

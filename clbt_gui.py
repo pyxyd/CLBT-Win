@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.1.7"
+VERSION = "1.1.8"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"

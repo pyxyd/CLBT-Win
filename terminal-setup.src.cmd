@@ -1073,7 +1073,7 @@ function Get-ManagedBundle {
     return [pscustomobject]$flat
 }
 
-function Restore-ManagedBundle($bundle) {
+function Restore-ManagedBundle($bundle, [string]$BaseDir = '') {
     if (-not $bundle) { throw '文件是空的' }
     # 兼容两种写法：新的扁平格式；以及 v1.1.6 以前的 { app, managed, scheme } 老格式
     $flat = $bundle
@@ -1086,7 +1086,7 @@ function Restore-ManagedBundle($bundle) {
     $known = @('style', 'opacity', 'useAcrylic', 'font', 'cursorShape', 'cursorBlink', 'padding',
                'bellStyle', 'scrollbarState', 'antialiasingMode', 'adjustIndistinguishableColors',
                'backgroundImage', 'backgroundImageOpacity', 'backgroundImageStretchMode',
-               'backgroundImageAlignment', 'backgroundData', 'backgroundName')
+               'backgroundImageAlignment', 'backgroundData')
     $hasAny = $false
     foreach ($k in $known) { if ($flat.PSObject.Properties.Name -contains $k) { $hasAny = $true; break } }
     if (-not $hasAny) { throw '这不是 CLBT 的外观文件（里面没有任何可识别的字段，如 style / opacity / font）' }
@@ -1138,13 +1138,42 @@ function Restore-ManagedBundle($bundle) {
                      'backgroundImageAlignment')) {
         $v = $null
         if ($flat.PSObject.Properties.Name -contains $k) { $v = $flat.$k }
-        # 老版本/手改的文件里可能出现空对象 {}：当成"没这个值"
+        # 老版本/手改的文件里可能出现空对象 {} 或空字符串：都当成"没这个值"
         if ($null -ne $v -and $v -is [pscustomobject] -and @($v.PSObject.Properties).Count -eq 0) { $v = $null }
+        if ($v -is [string] -and [string]::IsNullOrWhiteSpace($v)) { $v = $null }
         if ($null -ne $v) { Set-Prop $d $k $v }
         elseif ($d.PSObject.Properties.Name -contains $k) { $d.PSObject.Properties.Remove($k) }
     }
 
-    # ---- 内嵌的背景图：落地到托管目录再指过去
+    # ---- 背景图：优先解析 backgroundImage（相对路径按 JSON 目录），其次旧的 backgroundData
+    $bgImage = ''
+    if ($flat.PSObject.Properties.Name -contains 'backgroundImage' -and $flat.backgroundImage) {
+        $bgImage = ([string]$flat.backgroundImage).Trim()
+    }
+    if ($bgImage -and -not [System.IO.Path]::IsPathRooted($bgImage)) {
+        # 相对路径：相对"这个 JSON 文件所在的目录"
+        if ($BaseDir) { $bgImage = Join-Path $BaseDir $bgImage }
+        else { $bgImage = '' }
+    }
+    if ($bgImage -and (Test-Path -LiteralPath $bgImage)) {
+        $dir = Get-AdaptiveDir
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $ext = [System.IO.Path]::GetExtension($bgImage).ToLower()
+        if ($ext -notin @('.png', '.jpg', '.jpeg', '.gif', '.bmp')) { $ext = '.png' }
+        $bytes = [System.IO.File]::ReadAllBytes($bgImage)
+        $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+        $leaf = 'background_' + ([System.BitConverter]::ToString($hash).Replace('-', '').Substring(0, 8).ToLower()) + $ext
+        $dest = Join-Path $dir $leaf
+        if (-not (Test-Path -LiteralPath $dest)) { [System.IO.File]::WriteAllBytes($dest, $bytes) }
+        Set-Prop $d 'backgroundImage' $dest
+        Good ('背景图片已接入: ' + $leaf)
+        $bgImage = ''
+    }
+    elseif ($bgImage) {
+        Warn ('背景图找不到，已跳过: ' + $bgImage)
+        # 上面通用循环已经把"有问题的那条路径"写进去了，这里撤掉，避免 Terminal 指向一个不存在的文件
+        if ($d.PSObject.Properties.Name -contains 'backgroundImage') { $d.PSObject.Properties.Remove('backgroundImage') }
+    }
     $bgData = ''
     if ($flat.PSObject.Properties.Name -contains 'backgroundData' -and $flat.backgroundData) {
         $bgData = [string]$flat.backgroundData
@@ -1181,11 +1210,68 @@ function Restore-ManagedBundle($bundle) {
     [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Format-JsonValue($v) {
+    if ($null -eq $v) { return 'null' }
+    if ($v -is [bool]) { if ($v) { return 'true' } else { return 'false' } }
+    if ($v -is [int] -or $v -is [long] -or $v -is [double] -or $v -is [decimal]) {
+        return ([string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0}', $v))
+    }
+    if ($v -is [System.Management.Automation.PSCustomObject]) { return (Format-JsonBlock $v 0).Trim() }
+    $str = [string]$v
+    $esc = $str.Replace('\', '\\').Replace('"', '\"')
+    return '"' + $esc + '"'
+}
+
+function Format-JsonBlock($obj, [int]$level) {
+    # 自己排版：2 空格缩进、冒号后一个空格、嵌套对象规规矩矩缩进
+    #（PowerShell 5.1 的 ConvertTo-Json 会把嵌套成员对齐到奇怪的位置，而且冒号后是两个空格）
+    $pad = '  ' * $level
+    $inner = '  ' * ($level + 1)
+    $parts = @()
+    foreach ($pr in $obj.PSObject.Properties) {
+        $v = $pr.Value
+        if ($v -is [System.Management.Automation.PSCustomObject]) {
+            $parts += ($inner + '"' + $pr.Name + '": ' + (Format-JsonBlock $v ($level + 1)).Trim())
+        }
+        else {
+            $parts += ($inner + '"' + $pr.Name + '": ' + (Format-JsonValue $v))
+        }
+    }
+    if ($parts.Count -eq 0) { return '{}' }
+    return "{" + "`r`n" + ($parts -join ("," + "`r`n")) + "`r`n" + $pad + "}"
+}
+
+function Write-LookJson([string]$Path, $obj) {
+    # 第一行的 "//" 是 JSON 里写说明的惯例（VS Code 也这么干），导入时当未知字段忽略
+    $text = Format-JsonBlock $obj 0
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    [System.IO.File]::WriteAllText($Path, $text + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Get-LookJsonObject($bundle) {
+    # 导出时在最前面放一行说明；字段顺序：风格 -> 透明 -> 字体 -> 光标 -> 界面 -> 背景
+    $order = @('style', 'opacity', 'useAcrylic', 'font', 'cursorShape', 'cursorBlink', 'padding',
+               'bellStyle', 'scrollbarState', 'antialiasingMode', 'adjustIndistinguishableColors',
+               'backgroundImage', 'backgroundImageOpacity', 'backgroundImageStretchMode',
+               'backgroundImageAlignment', 'backgroundData')
+    $o = [ordered]@{}
+    $o['//'] = 'CLBT 外观文件 —— 字段名就是 Terminal settings.json 里的名字；改完运行 CLBT -import 这个文件.json 生效'
+    foreach ($k in $order) {
+        if ($bundle.PSObject.Properties.Name -contains $k) {
+            $v = $bundle.$k
+            if ($null -ne $v) { $o[$k] = $v }
+        }
+    }
+    return [pscustomobject]$o
+}
+
 function Save-Profile([string]$Name) {
     if (-not (Test-ProfileName $Name)) { throw "档案名只能用 1-24 个字（字母/数字/下划线/短横线/汉字）" }
     $bundle = Get-ManagedBundle
     $file = Join-Path (Get-ProfileDir) ($Name + '.json')
-    [System.IO.File]::WriteAllText($file, ($bundle | ConvertTo-Json -Depth 16), (New-Object System.Text.UTF8Encoding($false)))
+    $bundle = Attach-BackgroundSidecar $bundle $file
+    Write-LookJson $file (Get-LookJsonObject $bundle)
     Good ("已保存档案: " + $Name + "  (" + $file + ")")
 }
 
@@ -1194,7 +1280,7 @@ function Apply-Profile([string]$Name) {
     $file = Join-Path (Get-ProfileDir) ($Name + '.json')
     if (-not (Test-Path -LiteralPath $file)) { throw ("没有这个档案: " + $Name + "（CLBT -profile list 看有哪些）") }
     $bundle = [System.IO.File]::ReadAllText($file, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    Restore-ManagedBundle $bundle
+    Restore-ManagedBundle $bundle (Split-Path -Parent $file)
     Good ("已应用档案: " + $Name)
 }
 
@@ -1208,38 +1294,49 @@ function Remove-Profile([string]$Name) {
     $file = Join-Path (Get-ProfileDir) ($Name + '.json')
     if (-not (Test-Path -LiteralPath $file)) { throw ("没有这个档案: " + $Name) }
     Remove-Item -LiteralPath $file -Force
+    # 旁边的背景图一起删
+    Get-ChildItem -LiteralPath (Split-Path -Parent $file) -Filter ($Name + '.bg.*') -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
     Good ("已删除档案: " + $Name)
+}
+
+function Attach-BackgroundSidecar($bundle, [string]$JsonPath) {
+    # 背景图不塞进 JSON（几 MB 的 base64 会让文件没法看）：
+    # 放到旁边的  <同名>.bg.png，JSON 里只写这个文件名
+    if (-not ($bundle.PSObject.Properties.Name -contains 'backgroundImage')) { return $bundle }
+    $bgPath = [string]$bundle.backgroundImage
+    if (-not $bgPath -or -not (Test-Path -LiteralPath $bgPath)) { return $bundle }
+    $dir = Split-Path -Parent $JsonPath
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($JsonPath)
+    $ext = [System.IO.Path]::GetExtension($bgPath)
+    if (-not $ext) { $ext = '.png' }
+    $leaf = $base + '.bg' + $ext
+    $dest = if ($dir) { Join-Path $dir $leaf } else { $leaf }
+    if ($dest -ne (Get-Item -LiteralPath $bgPath).FullName) {
+        Copy-Item -LiteralPath $bgPath -Destination $dest -Force
+        Good ('背景图已放到旁边: ' + $leaf + '  (' + [math]::Round((Get-Item -LiteralPath $dest).Length / 1MB, 1) + ' MB)')
+    }
+    $bundle.backgroundImage = $leaf
+    return $bundle
 }
 
 function Export-Bundle([string]$Path) {
     if (-not $Path) { throw '缺少输出路径：CLBT -export "<文件.json>"' }
     $bundle = Get-ManagedBundle
-    # 背景图内嵌，换机/给同事才还原得出来（>12MB 就不带，避免 JSON 巨大）
-    $bgPath = ''
-    if ($bundle.PSObject.Properties.Name -contains 'backgroundImage') {
-        $bgPath = [string]$bundle.backgroundImage
-    }
-    if ($bgPath -and (Test-Path -LiteralPath $bgPath)) {
-        $mb = (Get-Item -LiteralPath $bgPath).Length / 1MB
-        if ($mb -le 12) {
-            $bundle | Add-Member -NotePropertyName backgroundData -NotePropertyValue ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($bgPath))) -Force
-            $bundle | Add-Member -NotePropertyName backgroundName -NotePropertyValue (Split-Path -Leaf $bgPath) -Force
-        }
-        else {
-            Warn ("背景图 " + [math]::Round($mb, 1) + " MB，太大没内嵌：对方还原后需要自己再选一次背景图")
-        }
-    }
-    $dir = Split-Path -Parent $Path
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    [System.IO.File]::WriteAllText($Path, ($bundle | ConvertTo-Json -Depth 16), (New-Object System.Text.UTF8Encoding($false)))
-    Good ("已导出: " + $Path)
+    $bundle = $bundle | Select-Object *
+    $bundle = Attach-BackgroundSidecar $bundle $Path
+    $obj = Get-LookJsonObject $bundle
+    Write-LookJson $Path $obj
+    Good ('已导出: ' + $Path)
 }
 
 function Import-Bundle([string]$Path) {
     if (-not $Path) { throw '缺少输入路径：CLBT -import "<文件.json>"' }
     if (-not (Test-Path -LiteralPath $Path)) { throw ("文件不存在: " + $Path) }
     $bundle = [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    Restore-ManagedBundle $bundle
+    $baseDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($Path))
+    Restore-ManagedBundle $bundle $baseDir
     Good ("已导入: " + $Path)
 }
 
