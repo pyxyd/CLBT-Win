@@ -1010,6 +1010,36 @@ function Test-ProfileName([string]$name) {
     return ($name -match '^[\w\-\u4e00-\u9fa5]{1,24}$')
 }
 
+function Get-BuiltinScheme([string]$Name) {
+    # 只给"本工具自带的"配色：Linux (Tango)。Campbell 是 Terminal 自带的，不用写
+    if ($Name -ne 'Linux (Tango)') { return $null }
+    return [pscustomobject]@{
+        name                = 'Linux (Tango)'
+        background          = '#000000'
+        foreground          = '#D3D7CF'
+        cursorColor         = '#D3D7CF'
+        selectionBackground = '#75507B'
+        black               = '#2E3436'
+        red                 = '#CC0000'
+        green               = '#4E9A06'
+        yellow              = '#C4A000'
+        blue                = '#3465A4'
+        purple              = '#75507B'
+        cyan                = '#06989A'
+        white               = '#D3D7CF'
+        brightBlack         = '#555753'
+        brightRed           = '#EF2929'
+        brightGreen         = '#8AE234'
+        brightYellow        = '#FCE94F'
+        brightBlue          = '#729FCF'
+        brightPurple        = '#AD7FA8'
+        brightCyan          = '#34E2E2'
+        brightWhite         = '#EEEEEC'
+    }
+}
+
+# 导出的 JSON 是扁平的：style / opacity / font / cursorShape / ... 直接放在最外层，
+# 里面不放任何 Linux/Windows 风格的 16 色配色（只留一个配色名，颜色由 Terminal 自己带）
 function Get-ManagedBundle {
     $settingsPath = Get-WtSettingsPath
     if (-not $settingsPath) { throw '找不到 Windows Terminal 的 settings.json' }
@@ -1019,39 +1049,48 @@ function Get-ManagedBundle {
         throw 'settings.json 里没有 profiles.defaults'
     }
     $d = $j.profiles.defaults
-    $managed = [ordered]@{}
-    foreach ($k in $MANAGED_KEYS) {
-        # 注意：PSCustomObject 不能用 $d[$k] 取值（会拿到空对象），要用 $d.($k)
-        if ($d.PSObject.Properties.Name -contains $k) { $managed[$k] = $d.($k) }
+    $flat = [ordered]@{}
+    $styleName = ''
+    if ($d.PSObject.Properties.Name -contains 'colorScheme' -and $d.colorScheme) {
+        $styleName = [string]$d.colorScheme
     }
-    $scheme = $null
-    $schemeName = ''
-    if ($managed.Contains('colorScheme')) { $schemeName = [string]$managed['colorScheme'] }
-    if ($schemeName -and $j.PSObject.Properties.Name -contains 'schemes') {
-        foreach ($sc in @($j.schemes)) {
-            if ($sc -and $sc.name -eq $schemeName) { $scheme = $sc; break }
+    $flat['style'] = $styleName
+    foreach ($k in @('opacity', 'useAcrylic', 'font', 'cursorShape', 'cursorBlink', 'padding',
+                     'bellStyle', 'scrollbarState', 'antialiasingMode', 'adjustIndistinguishableColors',
+                     'backgroundImage', 'backgroundImageOpacity', 'backgroundImageStretchMode',
+                     'backgroundImageAlignment')) {
+        if ($d.PSObject.Properties.Name -contains $k) {
+            # 注意：PSCustomObject 不能用 $d[$k] 取值（会拿到空对象），要用 $d.($k)
+            $flat[$k] = $d.($k)
         }
     }
     $bgName = ''
-    if ($managed.Contains('backgroundImage')) {
-        $bgPath = [string]$managed['backgroundImage']
+    if ($flat.Contains('backgroundImage')) {
+        $bgPath = [string]$flat['backgroundImage']
         if ($bgPath) { $bgName = Split-Path -Leaf $bgPath }
     }
-    return [pscustomobject]@{
-        app            = 'CLBT'
-        kind           = 'settings'
-        version        = $CLBT_VERSION
-        savedAt        = (Get-Date).ToString('s')
-        managed        = [pscustomobject]$managed
-        scheme         = $scheme
-        backgroundName = $bgName
-    }
+    $flat['backgroundName'] = $bgName
+    return [pscustomobject]$flat
 }
 
 function Restore-ManagedBundle($bundle) {
-    if (-not $bundle -or "$($bundle.app)" -ne 'CLBT' -or -not $bundle.managed) {
-        throw '这不是 CLBT 导出的配置文件（缺少 app/managed 字段）'
+    if (-not $bundle) { throw '文件是空的' }
+    # 兼容两种写法：新的扁平格式；以及 v1.1.6 以前的 { app, managed, scheme } 老格式
+    $flat = $bundle
+    if ($bundle.PSObject.Properties.Name -contains 'managed' -and $bundle.managed) {
+        $flat = $bundle.managed
+        if (-not ($flat.PSObject.Properties.Name -contains 'style') -and $bundle.scheme -and $bundle.scheme.name) {
+            $flat | Add-Member -NotePropertyName style -NotePropertyValue ([string]$bundle.scheme.name) -Force
+        }
     }
+    $known = @('style', 'opacity', 'useAcrylic', 'font', 'cursorShape', 'cursorBlink', 'padding',
+               'bellStyle', 'scrollbarState', 'antialiasingMode', 'adjustIndistinguishableColors',
+               'backgroundImage', 'backgroundImageOpacity', 'backgroundImageStretchMode',
+               'backgroundImageAlignment', 'backgroundData', 'backgroundName')
+    $hasAny = $false
+    foreach ($k in $known) { if ($flat.PSObject.Properties.Name -contains $k) { $hasAny = $true; break } }
+    if (-not $hasAny) { throw '这不是 CLBT 的外观文件（里面没有任何可识别的字段，如 style / opacity / font）' }
+
     $settingsPath = Get-WtSettingsPath
     if (-not $settingsPath) { throw '找不到 Windows Terminal 的 settings.json' }
     $backup = "$settingsPath.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
@@ -1068,40 +1107,64 @@ function Restore-ManagedBundle($bundle) {
     $d = $j.profiles.defaults
     Save-DefaultsSnapshot $d
 
-    if ($bundle.scheme) {
+    # ---- 配色：只认名字；本工具自带的那套（Linux (Tango)）在缺失时补进 schemes
+    $styleVal = ''
+    if ($flat.PSObject.Properties.Name -contains 'style' -and $null -ne $flat.style) {
+        $styleVal = ([string]$flat.style).Trim()
+    }
+    if ($styleVal) {
+        $lower = $styleVal.ToLower()
+        if ($lower -eq 'linux') { $styleVal = 'Linux (Tango)' }
+        elseif ($lower -eq 'win' -or $lower -eq 'windows') { $styleVal = 'Campbell' }
         $schemes = @()
         if ($j.PSObject.Properties.Name -contains 'schemes' -and $null -ne $j.schemes) {
-            $schemes = @($j.schemes | Where-Object { $null -ne $_ -and $_.name -ne $bundle.scheme.name })
+            $schemes = @($j.schemes | Where-Object { $null -ne $_ -and $_.name -ne $styleVal })
         }
-        $schemes += $bundle.scheme
-        Set-Prop $j 'schemes' $schemes
+        $builtin = Get-BuiltinScheme $styleVal
+        $exists = $false
+        foreach ($sc in @($j.schemes)) { if ($sc -and $sc.name -eq $styleVal) { $exists = $true; break } }
+        if ($builtin -and -not $exists) {
+            $schemes += $builtin
+            Set-Prop $j 'schemes' $schemes
+            Good ('配色方案已补上: ' + $styleVal)
+        }
+        Set-Prop $d 'colorScheme' $styleVal
     }
 
-    foreach ($k in $MANAGED_KEYS) {
+    # ---- 其余字段：文件里没写的 = 恢复 Terminal 默认（保证"套用 = 一模一样"）
+    foreach ($k in @('opacity', 'useAcrylic', 'font', 'cursorShape', 'cursorBlink', 'padding',
+                     'bellStyle', 'scrollbarState', 'antialiasingMode', 'adjustIndistinguishableColors',
+                     'backgroundImage', 'backgroundImageOpacity', 'backgroundImageStretchMode',
+                     'backgroundImageAlignment')) {
         $v = $null
-        if ($bundle.managed.PSObject.Properties.Name -contains $k) { $v = $bundle.managed.$k }
-        # 老版本/手改的档案里可能出现空对象 {}：当成"没这个值"，别把 settings 写坏
+        if ($flat.PSObject.Properties.Name -contains $k) { $v = $flat.$k }
+        # 老版本/手改的文件里可能出现空对象 {}：当成"没这个值"
         if ($null -ne $v -and $v -is [pscustomobject] -and @($v.PSObject.Properties).Count -eq 0) { $v = $null }
         if ($null -ne $v) { Set-Prop $d $k $v }
         elseif ($d.PSObject.Properties.Name -contains $k) { $d.PSObject.Properties.Remove($k) }
     }
 
-    # 导出的包里带了背景图：落地到托管目录再指过去
-    if ($bundle.backgroundData) {
+    # ---- 内嵌的背景图：落地到托管目录再指过去
+    $bgData = ''
+    if ($flat.PSObject.Properties.Name -contains 'backgroundData' -and $flat.backgroundData) {
+        $bgData = [string]$flat.backgroundData
+    }
+    if ($bgData) {
         $dir = Get-AdaptiveDir
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         $ext = '.png'
-        if ($bundle.backgroundName) {
-            $e = [System.IO.Path]::GetExtension([string]$bundle.backgroundName).ToLower()
+        $bgName = ''
+        if ($flat.PSObject.Properties.Name -contains 'backgroundName') { $bgName = [string]$flat.backgroundName }
+        if ($bgName) {
+            $e = [System.IO.Path]::GetExtension($bgName).ToLower()
             if ($e -in @('.png', '.jpg', '.jpeg', '.gif', '.bmp')) { $ext = $e }
         }
-        $bytes = [Convert]::FromBase64String([string]$bundle.backgroundData)
+        $bytes = [Convert]::FromBase64String($bgData)
         $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
         $leaf = 'background_' + ([System.BitConverter]::ToString($hash).Replace('-', '').Substring(0, 8).ToLower()) + $ext
-        $dest = Join-Path $dir $leaf
-        [System.IO.File]::WriteAllBytes($dest, $bytes)
-        Set-Prop $d 'backgroundImage' $dest
-        Good ("背景图片已还原: " + $leaf)
+        [System.IO.File]::WriteAllBytes((Join-Path $dir $leaf), $bytes)
+        Set-Prop $d 'backgroundImage' (Join-Path $dir $leaf)
+        Good ('背景图片已还原: ' + $leaf)
     }
 
     # 单个配置文件里若有 backgroundImage（哪怕是 null）会覆盖 defaults
@@ -1153,8 +1216,8 @@ function Export-Bundle([string]$Path) {
     $bundle = Get-ManagedBundle
     # 背景图内嵌，换机/给同事才还原得出来（>12MB 就不带，避免 JSON 巨大）
     $bgPath = ''
-    if ($bundle.managed.PSObject.Properties.Name -contains 'backgroundImage') {
-        $bgPath = [string]$bundle.managed.backgroundImage
+    if ($bundle.PSObject.Properties.Name -contains 'backgroundImage') {
+        $bgPath = [string]$bundle.backgroundImage
     }
     if ($bgPath -and (Test-Path -LiteralPath $bgPath)) {
         $mb = (Get-Item -LiteralPath $bgPath).Length / 1MB

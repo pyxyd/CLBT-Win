@@ -1,5 +1,36 @@
 # 更新日志
 
+## v1.1.7
+
+### 改：外观 JSON 换成扁平结构，不再内嵌配色
+
+按要求改成最直白的写法 —— 每一项就是 Terminal `profiles.defaults` 里的那个字段，
+`style` 只放配色方案的**名字**，**不再写入 Linux / Windows 风格的 16 色配色**：
+
+```json
+{
+  "style": "Linux (Tango)",
+  "opacity": 36,
+  "useAcrylic": true,
+  "font": { "face": "0xProto Mono Italic", "size": 12 },
+  "cursorShape": "filledBox",
+  "padding": "10, 8",
+  "backgroundImageOpacity": 0.7
+}
+```
+
+- `style` 也可以写 `linux` / `win` 当别名
+- 只有工具自带的 `Linux (Tango)` 会在导入时按需补进 `schemes`（`Campbell` 是 Terminal 自带的）
+- 老的 `{ "app": …, "managed": {…}, "scheme": {…} }` 格式**仍然能导入**，不会让你之前导的文件作废
+- 文件里没写的字段 = 恢复 Terminal 默认（保持"套用 = 一模一样"的语义）
+
+### 验证
+
+- `-export` 出来的就是上面的形状：`style` / `opacity` / `useAcrylic` / `font` / `cursorShape` / … 全在顶层
+- 导出 → `-win` → `-import`：Tango / 36% / 斜体 12 / 背景图 0.70 全部回来
+- 手写 `{"style": "Campbell", "opacity": 88}` 导入：只剩这两项生效，`font` / `backgroundImage` / `useAcrylic` 回到默认
+- 老格式 `D:\tmp\my-look.json` 仍能导入
+
 ## v1.1.6
 
 ### 修：`-win` 之后 cmd 里还是"Linux 那个样子"
