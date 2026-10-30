@@ -1210,6 +1210,7 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
     [string]$Scrollbar = '', [string]$Padding = '') {
     # Opacity < 0 表示按风格取默认值（linux 36% / win 100%）
     if ($Opacity -lt 0) { $Opacity = if ($Style -eq 'win') { 100 } else { 36 } }
+    $styleIsWin = ($Style -eq 'win')     # 后面几段还要用，先存一份（$style 会被别处覆盖）
 
     # -----------------------------------------------------------------
     # 1) 终端外观
@@ -1798,8 +1799,9 @@ try {
         foreach ($f in $fontFiles) {
             try {
                 $fam = Get-FamilyOf $f.FullName $f.BaseName
-                $style = Get-FontStyleOf $f.BaseName
-                $regName = if ($style -eq 'Regular') { "$fam (TrueType)" } else { "$fam $style (TrueType)" }
+                # 变量名别叫 $style：会把参数 $Style 覆盖掉（PowerShell 变量名不区分大小写）
+                $fontStyleOf = Get-FontStyleOf $f.BaseName
+                $regName = if ($fontStyleOf -eq 'Regular') { "$fam (TrueType)" } else { "$fam $fontStyleOf (TrueType)" }
 
                 # 已注册（系统级或用户级）就跳过，避免重复
                 if (($hkNames -contains $regName) -or ($cuNames -contains $regName)) { $skipped++; continue }
@@ -1820,6 +1822,20 @@ try {
             Good 'cmd 提示符：已写入 AutoRun（新开的 cmd 生效）'
         }
         catch { Warn "设置 cmd 提示符失败: $($_.Exception.Message)" }
+    }
+    elseif ($styleIsWin) {
+        # Windows 原生风格：cmd 的仿 Linux 提示符也得撤，不然新开的 cmd 还是"Linux 那个样子"
+        try {
+            $autoVal = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Command Processor' -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
+            if ($autoVal -and ($autoVal -match '(?i)cmd-prompt\.cmd')) {
+                Remove-CmdPrompt
+                Good 'cmd 提示符：已还原成 Windows 默认（新开的 cmd 生效）'
+            }
+            else {
+                Write-Host '  [--]   cmd 提示符：本来就是 Windows 默认' -ForegroundColor DarkGray
+            }
+        }
+        catch { Warn "还原 cmd 提示符失败: $($_.Exception.Message)" }
     }
     else {
         Write-Host '  [--]   cmd 提示符：保持原样（仅 PowerShell）' -ForegroundColor DarkGray
@@ -2950,6 +2966,8 @@ if ($env:WT_MODE -eq 'cli') {
             }
         }
         Write-Host '  新开终端标签页生效；已经是新标签页则重启终端。' -ForegroundColor DarkGray
+        Write-Host '  （当前这个窗口不会变：配色和提示符在它打开那一刻就定下来了）' -ForegroundColor DarkGray
+        Write-Host '  想立刻恢复 cmd 的默认提示符：在这个窗口里输入  prompt $P$G' -ForegroundColor DarkGray
         Write-Host ''
         exit 0
     }

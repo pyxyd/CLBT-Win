@@ -1,5 +1,33 @@
 # 更新日志
 
+## v1.1.6
+
+### 修：`-win` 之后 cmd 里还是"Linux 那个样子"
+
+有反馈「写了 `clbt -win`，看着没变」。查下来两件事：
+
+1. **`-win` 不会撤 cmd 的仿 Linux 提示符**（那是 `-undo-cmd` 的事）。于是新开的 cmd 标签页
+   仍然是 `50607@主机名:~$`，看起来就像"没生效"。现在 `-win`（Windows 原生风格）会顺手把
+   这个 AutoRun 挂钩也撤掉，并打印「cmd 提示符：已还原成 Windows 默认」。
+2. **老窗口本来就不会变**：窗口配色和 cmd 提示符在**打开那一刻**就定死了。原来只提示
+   「新开标签页生效」，容易被忽略。现在会明确写：
+   - `（当前这个窗口不会变：配色和提示符在它打开那一刻就定下来了）`
+   - `想立刻恢复 cmd 的默认提示符：在这个窗口里输入  prompt $P$G`
+
+### 顺带修的隐患：`$style` 把参数 `$Style` 覆盖了
+
+第 3 步装字体时循环里写了 `$style = Get-FontStyleOf ...`。PowerShell 变量名**不区分大小写**，
+`$style` 就是 `$Style` —— 于是函数参数 `$Style`（linux/win）在那之后变成了 `Italic`/`Regular`，
+导致后面任何 `if ($Style -eq 'win')` 都失效。这次新加的"win 撤 cmd 提示符"就是被它挡掉了。
+已把循环变量改名，并在函数入口存一份 `$styleIsWin` 供后面使用。
+
+### 验证
+
+- 先 `call cmd-prompt.cmd` 写进 AutoRun，再跑 `-win`：AutoRun 变空、提示"已还原成 Windows 默认"
+- `-linux` 仍是「cmd 提示符：保持原样（仅 PowerShell）」，不会误删
+- 结尾提示现在会说明老窗口不变 + 给出 `prompt $P$G`
+- `py_compile` / `pyflakes` 无告警
+
 ## v1.1.5
 
 ### 新功能：更多终端细节（字号 / 光标 / 闪烁 / 滚动条 / 内边距）
