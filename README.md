@@ -216,6 +216,84 @@ CLBT -import "D:\我的外观.json"
 
 图形界面点「配置档案」有同样的功能（列表 / 应用 / 删除 / 保存 / 导出 / 导入）。
 
+## 外观 JSON 的格式
+
+`CLBT -export` 导出的文件、`CLBT -profile save` 存的档案，**是同一种格式**（档案就是放在
+`profiles\` 目录里的同结构文件），可以直接用记事本打开改。
+
+只有 `app` 和 `managed` 是必需的：
+
+```json
+{
+  "app": "CLBT",
+  "kind": "settings",
+  "version": "1.1.6",
+  "savedAt": "2026-10-30T19:19:54",
+  "managed": {
+    "colorScheme": "Linux (Tango)",
+    "opacity": 36,
+    "useAcrylic": true,
+    "cursorShape": "filledBox",
+    "cursorBlink": false,
+    "padding": "10, 8",
+    "bellStyle": "none",
+    "scrollbarState": "hidden",
+    "antialiasingMode": "grayscale",
+    "adjustIndistinguishableColors": "always",
+    "font": { "face": "0xProto Mono Italic", "size": 12 },
+    "backgroundImage": "C:\\Users\\你\\AppData\\Local\\WindowsCommandLineBeautify\\background_1af6dad0.png",
+    "backgroundImageOpacity": 0.7,
+    "backgroundImageStretchMode": "uniformToFill",
+    "backgroundImageAlignment": "center"
+  },
+  "scheme": {
+    "name": "Linux (Tango)",
+    "background": "#000000", "foreground": "#D3D7CF", "cursorColor": "#D3D7CF",
+    "selectionBackground": "#75507B",
+    "black": "#2E3436", "red": "#CC0000", "green": "#4E9A06", "yellow": "#C4A000",
+    "blue": "#3465A4", "purple": "#75507B", "cyan": "#06989A", "white": "#D3D7CF",
+    "brightBlack": "#555753", "brightRed": "#EF2929", "brightGreen": "#8AE234",
+    "brightYellow": "#FCE94F", "brightBlue": "#729FCF", "brightPurple": "#AD7FA8",
+    "brightCyan": "#34E2E2", "brightWhite": "#EEEEEC"
+  },
+  "backgroundData": "<base64，可选：背景图本体>",
+  "backgroundName": "background_1af6dad0.png"
+}
+```
+
+`managed` 里的字段（**只写你想改的，没写的会恢复成 Terminal 默认**）：
+
+| 字段 | 类型 | 取值 |
+|---|---|---|
+| `colorScheme` | 字符串 | Terminal 里的配色名（配套的 `scheme` 会被写进 `schemes`） |
+| `opacity` | 整数 0–100 | 不透明度，100 = 完全不透明 |
+| `useAcrylic` | true/false | 亚克力磨砂开关 |
+| `cursorShape` | 字符串 | `bar` / `filledBox` / `emptyBox` / `underline` / `doubleUnderline` / `vintage` |
+| `cursorBlink` | true/false | 光标闪烁 |
+| `padding` | 字符串 | `"10, 8"`（水平, 垂直） |
+| `bellStyle` | 字符串 | `none` / `audible` / `visual` |
+| `scrollbarState` | 字符串 | `visible` / `hidden` |
+| `antialiasingMode` | 字符串 | `grayscale` / `cleartype` / `aliased` |
+| `adjustIndistinguishableColors` | 字符串 | `always` / `indexed` / `never` |
+| `font` | 对象 | `{ "face": 字族名, "size": 字号, "weight": "bold", "cellHeight": "1.2" }` |
+| `backgroundImage` | 字符串 | 图片绝对路径；不想用背景图就整行删掉 |
+| `backgroundImageOpacity` | 0–1 | 背景图浓淡 |
+| `backgroundImageStretchMode` | 字符串 | `fill` / `none` / `uniform` / `uniformToFill` |
+| `backgroundImageAlignment` | 字符串 | `center` / `top` / `bottom` / `left` / `right` / `topLeft` / … |
+
+几条规则：
+
+- **跳过的字段 = 恢复默认**：上面这十几个字段是本工具接管的，文件里没写就相当于"清掉"，
+  想保持原样就照着导出文件把整段留着
+- 其余设置（`defaultProfile`、`actions`、各种 profile、其它配色）**完全不碰**
+- 空对象 `{}` 当成"没写"（老版本 bug 留下的残留会被自动忽略并清掉）
+- `backgroundData` 是内嵌的背景图（base64，最多 12MB，超过就不带）；带了它就不需要
+  `backgroundImage` 指向的文件存在，导入时会按内容哈希落回 `background_*.png`
+- 文件用 UTF-8 存；手改后 `CLBT -import "路径.json"` 或 `CLBT -profile 名字` 生效
+
+另外两个 JSON 不是这个格式：`version.json` 是仓库里的版本号（`{major, middle, minor}`），
+`settings.json` 是 Windows Terminal 自己的配置（本工具只改 `profiles.defaults` 里那十几个字段）。
+
 ## 自动更新
 
 工具自己知道版本号，能从 GitHub 直接升级，不用重新下载压缩包。
