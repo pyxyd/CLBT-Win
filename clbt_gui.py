@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -68,6 +68,10 @@ AA_CHOICES = [("默认（不设置）", ""), ("灰度柔和", "grayscale"),
               ("清晰锐利", "cleartype"), ("像素风", "aliased")]
 ADJUST_CHOICES = [("默认（不设置）", ""), ("总是修正", "always"),
                   ("仅索引色", "indexed"), ("不修正", "never")]
+CURSOR_CHOICES = [("方块（默认）", "filledBox"), ("竖线", "bar"), ("下划线", "underline"),
+                  ("空心块", "emptyBox"), ("双下划线", "doubleUnderline"), ("复古", "vintage")]
+SCROLLBAR_CHOICES = [("跟随系统（不设置）", ""), ("显示", "visible"), ("隐藏", "hidden")]
+BLINK_CHOICES = [("跟随系统（不设置）", ""), ("闪", "on"), ("不闪", "off")]
 
 
 def labels(choices):
@@ -155,6 +159,11 @@ def read_current_settings():
             "cellHeight": font.get("cellHeight"),
             "aa": d.get("antialiasingMode"),
             "adjust": d.get("adjustIndistinguishableColors"),
+            "fontSize": font.get("size"),
+            "cursor": d.get("cursorShape"),
+            "cursorBlink": d.get("cursorBlink"),
+            "scrollbar": d.get("scrollbarState"),
+            "padding": d.get("padding"),
         }
     return None
 
@@ -183,6 +192,16 @@ def build_apply_args(st):
                  "-bg-align", st["bg_align"],
                  "-bg-stretch", st["bg_stretch"]]
 
+    if st.get("font_size"):
+        args += ["-font-size", str(st["font_size"])]
+    if st.get("cursor"):
+        args += ["-cursor", st["cursor"]]
+    if st.get("cursor_blink"):
+        args += ["-cursor-blink", str(st["cursor_blink"])]
+    if st.get("scrollbar"):
+        args += ["-scrollbar", st["scrollbar"]]
+    if st.get("padding"):
+        args += ["-padding", str(st["padding"])]
     if st["cell_height"]:
         args += ["-cell-height", st["cell_height"]]
     if st["aa"]:
@@ -552,6 +571,12 @@ class TermView:
         self.theme = TERM_PALETTES[style]
         family = st.get("face") or "Consolas"
         weight = "bold" if st.get("weight") == "bold" else "normal"
+        # 预览里的字号跟真实字号走（12pt ≈ 15px，按比例换算）
+        try:
+            fs = float(st.get("font_size") or 12)
+        except Exception:  # noqa: BLE001
+            fs = 12.0
+        self.px = max(9, min(30, int(round(fs * 1.25))))
         try:
             self.mono.configure(family=family, size=-self.px, weight=weight)
         except Exception:  # noqa: BLE001
@@ -1145,6 +1170,34 @@ class App:
 
         c, b = self._card(left, "细节")
         c.pack(fill="x")
+        g0 = tk.Frame(b, bg=CARD)
+        g0.pack(fill="x", pady=(0, 4))
+        tk.Label(g0, text="字号", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=0, sticky="w")
+        self.spin_size = tk.Spinbox(g0, from_=6, to=36, width=4, bg=CARD2, fg=FG, font=MONO_S,
+                                    relief="flat", bd=0, insertbackground=FG)
+        self.spin_size.grid(row=0, column=1, sticky="w", padx=(10, 14))
+        tk.Label(g0, text="光标", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=2, sticky="w")
+        self.var_cursor = tk.StringVar(value=CURSOR_CHOICES[0][0])
+        ttk.Combobox(g0, textvariable=self.var_cursor, values=labels(CURSOR_CHOICES), width=11,
+                     state="readonly", font=MONO_S).grid(row=0, column=3, sticky="w", padx=(10, 14))
+        # 闪烁是三态：WT 默认是"开"，用 checkbox 会把没碰过的人也改成"关"
+        self.var_blink = tk.StringVar(value=BLINK_CHOICES[0][0])
+        tk.Label(g0, text="闪烁", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=4, sticky="w",
+                                                                 padx=(0, 6))
+        ttk.Combobox(g0, textvariable=self.var_blink, values=labels(BLINK_CHOICES), width=13,
+                     state="readonly", font=MONO_S).grid(row=0, column=5, sticky="w")
+
+        g1b = tk.Frame(b, bg=CARD)
+        g1b.pack(fill="x", pady=(0, 4))
+        tk.Label(g1b, text="滚动条", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=0, sticky="w")
+        self.var_scrollbar = tk.StringVar(value=SCROLLBAR_CHOICES[0][0])
+        ttk.Combobox(g1b, textvariable=self.var_scrollbar, values=labels(SCROLLBAR_CHOICES),
+                     width=17, state="readonly", font=MONO_S).grid(row=0, column=1, sticky="w", padx=(10, 14))
+        tk.Label(g1b, text="内边距", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=2, sticky="w")
+        self.var_padding = tk.StringVar(value="")
+        tk.Entry(g1b, textvariable=self.var_padding, width=9, bg=CARD2, fg=FG, font=MONO_S,
+                 relief="flat", bd=0, insertbackground=FG).grid(row=0, column=3, sticky="w", padx=(10, 0))
+
         g = tk.Frame(b, bg=CARD)
         g.pack(fill="x")
         tk.Label(g, text="行高", bg=CARD, fg=DIM, font=UI_S).grid(row=0, column=0, sticky="w")
@@ -1254,6 +1307,8 @@ class App:
             btn = self._btn(acts, txt, fn)
             btn.pack(side="left", padx=(8, 0))
             self.action_buttons.append(btn)
+        self._btn(acts, "配置档案", self._profiles_dialog, bg=CARD, fg=GREEN).pack(
+            side="right", padx=(0, 8))
         diag = self._btn(acts, "环境诊断", self._diagnose, bg=CARD, fg=CYAN)
         diag.pack(side="right", padx=(0, 8))
         self._btn(acts, "清空日志", self._clear_log, bg=CARD, fg=DIM).pack(side="right")
@@ -1262,7 +1317,8 @@ class App:
         for var in (self.var_style, self.var_transp, self.var_enc, self.var_adapt,
                     self.var_acrylic, self.var_face, self.var_weight, self.var_font_file,
                     self.var_cellh, self.var_aa, self.var_adjust, self.var_bg_on,
-                    self.var_bg, self.var_bg_op, self.var_align, self.var_stretch):
+                    self.var_bg, self.var_bg_op, self.var_align, self.var_stretch,
+                    self.var_cursor, self.var_blink, self.var_scrollbar, self.var_padding):
             try:
                 var.trace_add("write", self._mark_dirty)
             except Exception:
@@ -1344,6 +1400,121 @@ class App:
             text=f"{style} · 不透明度 {100 - st['transparent']}% · 亚克力{acr} · "
                  f"背景图 {bg}（浓淡 {st['bg_opacity']:.2f}）· {face} / {self.var_weight.get()}"
                  f"　·　{dt:.1f}s")
+
+    # ---------------- 配置档案
+    def _profiles_dir(self):
+        return os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                            "WindowsCommandLineBeautify", "profiles")
+
+    def _list_profiles(self):
+        d = self._profiles_dir()
+        if not os.path.isdir(d):
+            return []
+        return sorted(f[:-5] for f in os.listdir(d) if f.lower().endswith(".json"))
+
+    def _profiles_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title("配置档案")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.resizable(False, False)
+        pad = tk.Frame(win, bg=BG)
+        pad.pack(fill="both", expand=True, padx=14, pady=12)
+
+        tk.Label(pad, text="把当前外观存成档案，以后一键切回来（也可以导出成一个文件发人）",
+                 bg=BG, fg=DIM, font=UI_S, wraplength=420, justify="left").pack(fill="x")
+        box = tk.Frame(pad, bg=BG)
+        box.pack(fill="x", pady=(8, 6))
+        lb = tk.Listbox(box, height=6, bg=CARD2, fg=FG, font=MONO_S, relief="flat", bd=0,
+                        activestyle="none", selectbackground=BLUE, selectforeground="#06210F")
+        lb.pack(side="left", fill="x", expand=True)
+        sb = tk.Scrollbar(box, command=lb.yview, bg=CARD2, troughcolor=BG, bd=0, width=10)
+        lb.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+
+        def refill():
+            lb.delete(0, "end")
+            for n in self._list_profiles():
+                lb.insert("end", n)
+            if lb.size():
+                lb.selection_set(0)
+
+        tk.Label(pad, text="目录: " + self._profiles_dir(), bg=BG, fg=DIM,
+                 font=MONO_S, wraplength=420, justify="left").pack(fill="x")
+        refill()
+
+        def sel():
+            if not lb.curselection():
+                messagebox.showinfo("配置档案", "先在列表里选一个档案", parent=win)
+                return None
+            return lb.get(lb.curselection()[0])
+
+        def do_apply():
+            name = sel()
+            if name:
+                self._run(["-profile", name, "/y"], "应用档案 " + name, clears_dirty=True)
+                win.destroy()
+
+        def do_delete():
+            name = sel()
+            if not name:
+                return
+            if messagebox.askyesno("配置档案", "删除档案「%s」？" % name, parent=win):
+                self._run(["-profile", "delete", name, "/y"], "删除档案 " + name)
+                refill()
+
+        row = tk.Frame(pad, bg=BG)
+        row.pack(fill="x", pady=(8, 0))
+        self._btn(row, "应用选中的档案", do_apply, bg=GREEN, fg="#06210F").pack(side="left")
+        self._btn(row, "删除", do_delete, bg=CARD, fg=RED).pack(side="left", padx=(8, 0))
+
+        row2 = tk.Frame(pad, bg=BG)
+        row2.pack(fill="x", pady=(10, 0))
+        tk.Label(row2, text="当前外观存为：", bg=BG, fg=DIM, font=UI_S).pack(side="left")
+        name_var = tk.StringVar(value="work")
+        tk.Entry(row2, textvariable=name_var, width=14, bg=CARD2, fg=FG, font=MONO_S,
+                 relief="flat", bd=0, insertbackground=FG).pack(side="left", padx=(6, 8))
+
+        def do_save():
+            name = (name_var.get() or "").strip()
+            if not name:
+                messagebox.showinfo("配置档案", "先给档案起个名字（如 work / game）", parent=win)
+                return
+            self._run(["-profile", "save", name, "/y"], "保存档案 " + name)
+            refill()
+
+        self._btn(row2, "保存", do_save, bg=CARD, fg=BLUE).pack(side="left")
+
+        row3 = tk.Frame(pad, bg=BG)
+        row3.pack(fill="x", pady=(12, 0))
+
+        def do_export():
+            path = filedialog.asksaveasfilename(
+                parent=win, title="导出当前外观", defaultextension=".json",
+                initialfile="clbt-look.json", filetypes=[("CLBT 外观", "*.json")])
+            if path:
+                self._run(["-export", path, "/y"], "导出外观")
+
+        def do_import():
+            path = filedialog.askopenfilename(
+                parent=win, title="导入外观文件", filetypes=[("CLBT 外观", "*.json")])
+            if path:
+                self._run(["-import", path, "/y"], "导入外观", clears_dirty=True)
+                win.destroy()
+
+        self._btn(row3, "导出成文件…", do_export, bg=CARD, fg=YELLOW).pack(side="left")
+        self._btn(row3, "导入文件…", do_import, bg=CARD, fg=YELLOW).pack(side="left", padx=(8, 0))
+        self._btn(row3, "关闭", win.destroy, bg=CARD, fg=DIM).pack(side="right")
+
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - win.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + 120
+        win.geometry("+%d+%d" % (x, y))
+        try:
+            win.attributes("-topmost", True)
+            win.after(300, lambda: win.attributes("-topmost", False))
+        except Exception:
+            pass
 
     # ---------------- 自动更新
     def _on_update_click(self):
@@ -1488,7 +1659,8 @@ class App:
         vs = (self.var_style, self.var_transp, self.var_enc, self.var_adapt, self.var_acrylic,
               self.var_face, self.var_weight, self.var_font_file, self.var_cellh, self.var_aa,
               self.var_adjust, self.var_bg_on, self.var_bg, self.var_bg_op, self.var_align,
-              self.var_stretch, self.var_font_mode)
+              self.var_stretch, self.var_font_mode, self.var_cursor, self.var_blink,
+              self.var_scrollbar, self.var_padding)
         return tuple(str(v.get()) for v in vs)
 
     def _finish_settle(self):
@@ -1568,6 +1740,20 @@ class App:
             self.var_stretch.set(label_of(STRETCH_CHOICES, cur["bgStretch"]))
         if cur.get("cellHeight"):
             self.var_cellh.set(str(cur["cellHeight"]))
+        if cur.get("fontSize"):
+            try:
+                self.spin_size.delete(0, "end")
+                self.spin_size.insert(0, str(int(float(cur["fontSize"]))))
+            except Exception:
+                pass
+        if cur.get("cursor"):
+            self.var_cursor.set(label_of(CURSOR_CHOICES, str(cur["cursor"])))
+        if cur.get("cursorBlink") is not None:
+            self.var_blink.set(label_of(BLINK_CHOICES, "on" if cur["cursorBlink"] else "off"))
+        if cur.get("scrollbar"):
+            self.var_scrollbar.set(label_of(SCROLLBAR_CHOICES, str(cur["scrollbar"])))
+        if cur.get("padding") is not None:
+            self.var_padding.set(str(cur["padding"]))
         if cur.get("aa"):
             self.var_aa.set(label_of(AA_CHOICES, cur["aa"]))
         if cur.get("adjust"):
@@ -1691,6 +1877,11 @@ class App:
             "weight": value_of(WEIGHT_CHOICES, self.var_weight.get()),
             "font_file": self.var_font_file.get().strip(),
             "cell_height": self.var_cellh.get().strip(),
+            "font_size": (self.spin_size.get() or "").strip(),
+            "cursor": value_of(CURSOR_CHOICES, self.var_cursor.get()),
+            "cursor_blink": value_of(BLINK_CHOICES, self.var_blink.get()),
+            "scrollbar": value_of(SCROLLBAR_CHOICES, self.var_scrollbar.get()),
+            "padding": self.var_padding.get().strip(),
             "aa": value_of(AA_CHOICES, self.var_aa.get()),
             "adjust": value_of(ADJUST_CHOICES, self.var_adjust.get()),
         }

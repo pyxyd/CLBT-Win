@@ -55,6 +55,14 @@ set "WT_BGOPACITY="
 set "WT_BGSTRETCH="
 set "WT_UPDATE_CHECK="
 set "WT_UPDATE_JSON="
+set "WT_FONTSIZE="
+set "WT_CURSOR="
+set "WT_CURSORBLINK="
+set "WT_SCROLLBAR="
+set "WT_PADDING="
+set "WT_PROFILE="
+set "WT_PROFILE_ACTION="
+set "WT_FILE="
 set "WT_RC=0"
 
 :parse
@@ -80,6 +88,17 @@ if /i "%~1"=="-preview" goto :arg_preview
 if /i "%~1"=="-diagnose" goto :arg_diag
 if /i "%~1"=="-doctor" goto :arg_diag
 if /i "%~1"=="-update" goto :arg_update
+if /i "%~1"=="-font-size" goto :arg_fontsize
+if /i "%~1"=="-cursor" goto :arg_cursor
+if /i "%~1"=="-cursor-blink" goto :arg_cursorblink
+if /i "%~1"=="-scrollbar" goto :arg_scrollbar
+if /i "%~1"=="-padding" goto :arg_padding
+if /i "%~1"=="-profile" goto :arg_profile
+if /i "%~1"=="--profile" goto :arg_profile
+if /i "%~1"=="-export" goto :arg_export
+if /i "%~1"=="--export" goto :arg_export
+if /i "%~1"=="-import" goto :arg_import
+if /i "%~1"=="--import" goto :arg_import
 if /i "%~1"=="--install-fonts" goto :arg_ifonts
 if /i "%~1"=="-opacity" goto :arg_opacity
 if /i "%~1"=="--opacity" goto :arg_opacity
@@ -173,6 +192,67 @@ goto :parse
 :arg_diag
 set "WT_MODE=diag"
 goto :launch
+
+:arg_profile
+set "WT_MODE=profile"
+set "WT_PROFILE=%~2"
+set "WT_PROFILE_ACTION=%~2"
+if /i "%~2"=="save" set "WT_PROFILE=%~3"
+if /i "%~2"=="delete" set "WT_PROFILE=%~3"
+shift
+shift
+if /i "%WT_PROFILE_ACTION%"=="save" shift
+if /i "%WT_PROFILE_ACTION%"=="delete" shift
+goto :parse
+
+:arg_export
+set "WT_MODE=export"
+set "WT_FILE=%~2"
+shift
+shift
+goto :parse
+
+:arg_import
+set "WT_MODE=import"
+set "WT_FILE=%~2"
+shift
+shift
+goto :parse
+
+:arg_fontsize
+set "WT_MODE=cli"
+set "WT_FONTSIZE=%~2"
+shift
+shift
+goto :parse
+
+:arg_cursor
+set "WT_MODE=cli"
+set "WT_CURSOR=%~2"
+shift
+shift
+goto :parse
+
+:arg_cursorblink
+set "WT_MODE=cli"
+set "WT_CURSORBLINK=%~2"
+shift
+shift
+goto :parse
+
+:arg_scrollbar
+set "WT_MODE=cli"
+set "WT_SCROLLBAR=%~2"
+shift
+shift
+goto :parse
+
+:arg_padding
+set "WT_MODE=cli"
+set "WT_PADDING=%~2"
+shift
+shift
+goto :parse
 
 :arg_update
 set "WT_MODE=update"
@@ -896,6 +976,211 @@ function Invoke-CLBTUpdate([switch]$CheckOnly, [switch]$Json) {
 }
 
 # =====================================================================
+# 配置档案 / 导出导入
+#   - profile：存在本机 %LOCALAPPDATA%\WindowsCommandLineBeautify\profiles\<名字>.json
+#   - export / import：一个可转发的 JSON（背景图会内嵌成 base64，换机也能还原）
+# =====================================================================
+
+function Get-WtSettingsPath {
+    if ($env:WT_SETTINGS_PATH) { return $env:WT_SETTINGS_PATH }
+    $la = $env:LOCALAPPDATA
+    $cands = @(
+        (Join-Path $la 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json'),
+        (Join-Path $la 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json'),
+        (Join-Path $la 'Microsoft\Windows Terminal\settings.json'),
+        (Join-Path $la 'Microsoft\Windows Terminal Preview\settings.json')
+    )
+    return ($cands | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
+}
+
+# 只接管"本工具会写"的那些字段，其余用户设置原样保留
+$MANAGED_KEYS = @('colorScheme', 'opacity', 'useAcrylic', 'cursorShape', 'cursorBlink',
+    'padding', 'bellStyle', 'scrollbarState', 'antialiasingMode', 'adjustIndistinguishableColors',
+    'font', 'backgroundImage', 'backgroundImageOpacity', 'backgroundImageStretchMode',
+    'backgroundImageAlignment')
+
+function Get-ProfileDir {
+    $dir = Join-Path (Get-AdaptiveDir) 'profiles'
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    return $dir
+}
+
+function Test-ProfileName([string]$name) {
+    if (-not $name) { return $false }
+    return ($name -match '^[\w\-\u4e00-\u9fa5]{1,24}$')
+}
+
+function Get-ManagedBundle {
+    $settingsPath = Get-WtSettingsPath
+    if (-not $settingsPath) { throw '找不到 Windows Terminal 的 settings.json' }
+    $raw = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false))
+    $j = (Strip-JsonComments $raw) | ConvertFrom-Json
+    if (-not $j.profiles -or $j.profiles -is [System.Array] -or -not $j.profiles.defaults) {
+        throw 'settings.json 里没有 profiles.defaults'
+    }
+    $d = $j.profiles.defaults
+    $managed = [ordered]@{}
+    foreach ($k in $MANAGED_KEYS) {
+        # 注意：PSCustomObject 不能用 $d[$k] 取值（会拿到空对象），要用 $d.($k)
+        if ($d.PSObject.Properties.Name -contains $k) { $managed[$k] = $d.($k) }
+    }
+    $scheme = $null
+    $schemeName = ''
+    if ($managed.Contains('colorScheme')) { $schemeName = [string]$managed['colorScheme'] }
+    if ($schemeName -and $j.PSObject.Properties.Name -contains 'schemes') {
+        foreach ($sc in @($j.schemes)) {
+            if ($sc -and $sc.name -eq $schemeName) { $scheme = $sc; break }
+        }
+    }
+    $bgName = ''
+    if ($managed.Contains('backgroundImage')) {
+        $bgPath = [string]$managed['backgroundImage']
+        if ($bgPath) { $bgName = Split-Path -Leaf $bgPath }
+    }
+    return [pscustomobject]@{
+        app            = 'CLBT'
+        kind           = 'settings'
+        version        = $CLBT_VERSION
+        savedAt        = (Get-Date).ToString('s')
+        managed        = [pscustomobject]$managed
+        scheme         = $scheme
+        backgroundName = $bgName
+    }
+}
+
+function Restore-ManagedBundle($bundle) {
+    if (-not $bundle -or "$($bundle.app)" -ne 'CLBT' -or -not $bundle.managed) {
+        throw '这不是 CLBT 导出的配置文件（缺少 app/managed 字段）'
+    }
+    $settingsPath = Get-WtSettingsPath
+    if (-not $settingsPath) { throw '找不到 Windows Terminal 的 settings.json' }
+    $backup = "$settingsPath.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    Copy-Item -LiteralPath $settingsPath -Destination $backup -Force
+    $raw = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false))
+    $j = (Strip-JsonComments $raw) | ConvertFrom-Json
+    if (-not ($j.PSObject.Properties.Name -contains 'profiles') -or $null -eq $j.profiles) {
+        Set-Prop $j 'profiles' ([pscustomobject]@{})
+    }
+    if ($j.profiles -is [System.Array]) { throw 'settings.json 的 profiles 是旧版数组格式，不支持' }
+    if (-not ($j.profiles.PSObject.Properties.Name -contains 'defaults') -or $null -eq $j.profiles.defaults) {
+        Set-Prop $j.profiles 'defaults' ([pscustomobject]@{})
+    }
+    $d = $j.profiles.defaults
+    Save-DefaultsSnapshot $d
+
+    if ($bundle.scheme) {
+        $schemes = @()
+        if ($j.PSObject.Properties.Name -contains 'schemes' -and $null -ne $j.schemes) {
+            $schemes = @($j.schemes | Where-Object { $null -ne $_ -and $_.name -ne $bundle.scheme.name })
+        }
+        $schemes += $bundle.scheme
+        Set-Prop $j 'schemes' $schemes
+    }
+
+    foreach ($k in $MANAGED_KEYS) {
+        $v = $null
+        if ($bundle.managed.PSObject.Properties.Name -contains $k) { $v = $bundle.managed.$k }
+        # 老版本/手改的档案里可能出现空对象 {}：当成"没这个值"，别把 settings 写坏
+        if ($null -ne $v -and $v -is [pscustomobject] -and @($v.PSObject.Properties).Count -eq 0) { $v = $null }
+        if ($null -ne $v) { Set-Prop $d $k $v }
+        elseif ($d.PSObject.Properties.Name -contains $k) { $d.PSObject.Properties.Remove($k) }
+    }
+
+    # 导出的包里带了背景图：落地到托管目录再指过去
+    if ($bundle.backgroundData) {
+        $dir = Get-AdaptiveDir
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $ext = '.png'
+        if ($bundle.backgroundName) {
+            $e = [System.IO.Path]::GetExtension([string]$bundle.backgroundName).ToLower()
+            if ($e -in @('.png', '.jpg', '.jpeg', '.gif', '.bmp')) { $ext = $e }
+        }
+        $bytes = [Convert]::FromBase64String([string]$bundle.backgroundData)
+        $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+        $leaf = 'background_' + ([System.BitConverter]::ToString($hash).Replace('-', '').Substring(0, 8).ToLower()) + $ext
+        $dest = Join-Path $dir $leaf
+        [System.IO.File]::WriteAllBytes($dest, $bytes)
+        Set-Prop $d 'backgroundImage' $dest
+        Good ("背景图片已还原: " + $leaf)
+    }
+
+    # 单个配置文件里若有 backgroundImage（哪怕是 null）会覆盖 defaults
+    if ($j.profiles.PSObject.Properties.Name -contains 'list' -and $null -ne $j.profiles.list) {
+        foreach ($p in @($j.profiles.list)) {
+            if (-not $p) { continue }
+            foreach ($k in @('backgroundImage', 'colorScheme', 'opacity', 'useAcrylic', 'cursorShape', 'font')) {
+                if ($p.PSObject.Properties.Name -contains $k) { $p.PSObject.Properties.Remove($k) }
+            }
+        }
+    }
+
+    $json = $j | ConvertTo-Json -Depth 32
+    [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Save-Profile([string]$Name) {
+    if (-not (Test-ProfileName $Name)) { throw "档案名只能用 1-24 个字（字母/数字/下划线/短横线/汉字）" }
+    $bundle = Get-ManagedBundle
+    $file = Join-Path (Get-ProfileDir) ($Name + '.json')
+    [System.IO.File]::WriteAllText($file, ($bundle | ConvertTo-Json -Depth 16), (New-Object System.Text.UTF8Encoding($false)))
+    Good ("已保存档案: " + $Name + "  (" + $file + ")")
+}
+
+function Apply-Profile([string]$Name) {
+    if (-not (Test-ProfileName $Name)) { throw "档案名不合法: $Name" }
+    $file = Join-Path (Get-ProfileDir) ($Name + '.json')
+    if (-not (Test-Path -LiteralPath $file)) { throw ("没有这个档案: " + $Name + "（CLBT -profile list 看有哪些）") }
+    $bundle = [System.IO.File]::ReadAllText($file, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    Restore-ManagedBundle $bundle
+    Good ("已应用档案: " + $Name)
+}
+
+function Get-Profiles {
+    $dir = Get-ProfileDir
+    return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue |
+        Sort-Object Name | ForEach-Object { $_.BaseName })
+}
+
+function Remove-Profile([string]$Name) {
+    $file = Join-Path (Get-ProfileDir) ($Name + '.json')
+    if (-not (Test-Path -LiteralPath $file)) { throw ("没有这个档案: " + $Name) }
+    Remove-Item -LiteralPath $file -Force
+    Good ("已删除档案: " + $Name)
+}
+
+function Export-Bundle([string]$Path) {
+    if (-not $Path) { throw '缺少输出路径：CLBT -export "<文件.json>"' }
+    $bundle = Get-ManagedBundle
+    # 背景图内嵌，换机/给同事才还原得出来（>12MB 就不带，避免 JSON 巨大）
+    $bgPath = ''
+    if ($bundle.managed.PSObject.Properties.Name -contains 'backgroundImage') {
+        $bgPath = [string]$bundle.managed.backgroundImage
+    }
+    if ($bgPath -and (Test-Path -LiteralPath $bgPath)) {
+        $mb = (Get-Item -LiteralPath $bgPath).Length / 1MB
+        if ($mb -le 12) {
+            $bundle | Add-Member -NotePropertyName backgroundData -NotePropertyValue ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($bgPath))) -Force
+            $bundle | Add-Member -NotePropertyName backgroundName -NotePropertyValue (Split-Path -Leaf $bgPath) -Force
+        }
+        else {
+            Warn ("背景图 " + [math]::Round($mb, 1) + " MB，太大没内嵌：对方还原后需要自己再选一次背景图")
+        }
+    }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    [System.IO.File]::WriteAllText($Path, ($bundle | ConvertTo-Json -Depth 16), (New-Object System.Text.UTF8Encoding($false)))
+    Good ("已导出: " + $Path)
+}
+
+function Import-Bundle([string]$Path) {
+    if (-not $Path) { throw '缺少输入路径：CLBT -import "<文件.json>"' }
+    if (-not (Test-Path -LiteralPath $Path)) { throw ("文件不存在: " + $Path) }
+    $bundle = [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    Restore-ManagedBundle $bundle
+    Good ("已导入: " + $Path)
+}
+
+# =====================================================================
 # 核心：应用美化（由 --apply 子进程调用）
 # =====================================================================
 function Save-DefaultsSnapshot($d) {
@@ -920,7 +1205,9 @@ function Save-DefaultsSnapshot($d) {
 function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity = -1, [string]$Background = '',
     [string]$AdjustColors = '', [string]$CellHeight = '', [string]$Antialiasing = '',
     [string]$BgAlign = '', [string]$BgStretch = '', [string]$BgOpacity = '',
-    [string]$FontWeight = '', [string]$Acrylic = '') {
+    [string]$FontWeight = '', [string]$Acrylic = '',
+    [string]$FontSize = '', [string]$Cursor = '', [string]$CursorBlink = '',
+    [string]$Scrollbar = '', [string]$Padding = '') {
     # Opacity < 0 表示按风格取默认值（linux 36% / win 100%）
     if ($Opacity -lt 0) { $Opacity = if ($Style -eq 'win') { 100 } else { 36 } }
 
@@ -1041,6 +1328,68 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
             if ($d.PSObject.Properties.Name -contains 'padding') { $d.PSObject.Properties.Remove('padding') }
             # Windows 原生风格不应残留自定义字体
             if ($d.PSObject.Properties.Name -contains 'font') { $d.PSObject.Properties.Remove('font') }
+        }
+
+        # ---- 更多终端细节（字号 / 光标 / 滚动条 / 内边距）----
+        # 放在两种风格的分支之后：命令行显式给了就覆盖风格预设
+        if ($FontSize) {
+            $fsVal = 0.0
+            if (-not [double]::TryParse($FontSize, [ref]$fsVal) -or $fsVal -lt 6 -or $fsVal -gt 36) {
+                throw "font-size 需要 6-36 的数字（如 12）"
+            }
+            if (-not ($d.PSObject.Properties.Name -contains 'font') -or $null -eq $d.font) {
+                Set-Prop $d 'font' ([pscustomobject]@{})
+            }
+            Set-Prop $d.font 'size' $fsVal
+            Good ("字号: " + $fsVal)
+        }
+        if ($Cursor) {
+            $curMap = @{
+                'bar' = 'bar'; '竖线' = 'bar'
+                'block' = 'filledBox'; '方块' = 'filledBox'; 'filledbox' = 'filledBox'
+                'emptybox' = 'emptyBox'; '空心块' = 'emptyBox'; '空心' = 'emptyBox'
+                'underline' = 'underline'; '下划线' = 'underline'
+                'doubleunderline' = 'doubleUnderline'; '双下划线' = 'doubleUnderline'
+                'vintage' = 'vintage'; '复古' = 'vintage'
+            }
+            $curKey = $Cursor.Trim().ToLower()
+            if (-not $curMap.ContainsKey($curKey)) {
+                throw "cursor 只能是 bar / block / emptyBox / underline / doubleUnderline / vintage（也可写 竖线/方块/空心块/下划线）"
+            }
+            Set-Prop $d 'cursorShape' $curMap[$curKey]
+            Good ("光标样式: " + $curMap[$curKey])
+        }
+        if ($CursorBlink) {
+            $cb = $CursorBlink.Trim().ToLower()
+            if ($cb -in @('on', 'true', '1', '开', '开启')) { Set-Prop $d 'cursorBlink' $true; Good '光标闪烁: 开' }
+            elseif ($cb -in @('off', 'false', '0', '关', '关闭')) { Set-Prop $d 'cursorBlink' $false; Good '光标闪烁: 关' }
+            else { throw "cursor-blink 只能是 on / off（开 / 关）" }
+        }
+        if ($Scrollbar) {
+            $sb = $Scrollbar.Trim().toLower()
+            if ($sb -in @('visible', 'show', '显示', '有')) {
+                Set-Prop $d 'scrollbarState' 'visible'; Good '滚动条: 显示'
+            }
+            elseif ($sb -in @('hidden', 'hide', 'off', '隐藏', '无')) {
+                Set-Prop $d 'scrollbarState' 'hidden'; Good '滚动条: 隐藏'
+            }
+            else { throw "scrollbar 只能是 visible / hidden（显示 / 隐藏）" }
+        }
+        if ($Padding) {
+            # 接受 "12"、"10, 8"（水平, 垂直）；0 表示紧贴边缘
+            $padText = $Padding.Trim()
+            $padOk = $false
+            $padParts = @($padText -split ',' | ForEach-Object { $_.Trim() })
+            if ($padParts.Count -le 2) {
+                $padOk = $true
+                foreach ($pp in $padParts) {
+                    $pn = 0
+                    if (-not [int]::TryParse($pp, [ref]$pn) -or $pn -lt 0 -or $pn -gt 48) { $padOk = $false }
+                }
+            }
+            if (-not $padOk) { throw "padding 需要 0-48 的数字，或 '水平, 垂直'（如 10, 8）" }
+            Set-Prop $d 'padding' $padText
+            Good ("内边距: " + $padText)
         }
 
         # ---- 高级外观：不可辨颜色修正 / 抗锯齿 / 行高 ----
@@ -1204,8 +1553,14 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
             if (-not ($d.PSObject.Properties.Name -contains 'font') -or $null -eq $d.font) {
                 Set-Prop $d 'font' ([pscustomobject]@{})
             }
+            # 换字体时别把字号冲掉：显式 -font-size 优先，其次沿用已有字号，最后才回默认 12
+            $sizeKeep = $null
+            if ($d.font.PSObject.Properties.Name -contains 'size' -and $null -ne $d.font.size) {
+                $sizeKeep = $d.font.size
+            }
             Set-Prop $d.font 'face' $Face
-            Set-Prop $d.font 'size' 12
+            $sizeUse = if ($FontSize) { [double]$FontSize } elseif ($null -ne $sizeKeep) { [double]$sizeKeep } else { 12 }
+            Set-Prop $d.font 'size' $sizeUse
         }
         if ($FontWeight) {
             if (-not ($d.PSObject.Properties.Name -contains 'font') -or $null -eq $d.font) {
@@ -1224,7 +1579,8 @@ function Invoke-Beautify([string]$Face, [string]$Style = 'linux', [int]$Opacity 
 
         $json = $j | ConvertTo-Json -Depth 32
         [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
-        $styleText = if ($Style -eq 'win') { 'Campbell 配色 / 默认光标' } else { '黑色亚克力 / 方块光标 / Tango 配色' }
+        $styleText = if ($Style -eq 'win') { 'Campbell 配色 / 默认光标' } else { '黑色亚克力 / Tango 配色' }
+        if ($Cursor) { $styleText = $styleText + ' / ' + $Cursor }
         Good ("外观已写入（" + $styleText + "，不透明度 " + $Opacity + "%）")
         if ($Face) { Good "字体: $Face" }
         if ($FontWeight) {
@@ -2131,6 +2487,11 @@ function Show-CliHelp {
     Write-Host '                                 另有 左上 topLeft / 右上 topRight / 左下 bottomLeft / 右下 bottomRight' -ForegroundColor DarkGray
     Write-Host '    CLBT -bg-stretch <拉伸>       背景图拉伸: 铺满并裁剪 uniformToFill / 拉伸填满 fill / 完整显示 uniform / 原始尺寸 none' -ForegroundColor Gray
     Write-Host '    CLBT -bg-opacity <0-1>        背景图浓淡（0-1，默认 0.55；越小越透）' -ForegroundColor Gray
+    Write-Host '    CLBT -font-size <6-36>       字号（默认 12）' -ForegroundColor Gray
+    Write-Host '    CLBT -cursor <样式>          光标: 竖线 bar / 方块 block / 空心块 emptyBox / 下划线 underline' -ForegroundColor Gray
+    Write-Host '    CLBT -cursor-blink on|off    光标是否闪烁' -ForegroundColor Gray
+    Write-Host '    CLBT -scrollbar <显隐>       滚动条: 显示 visible / 隐藏 hidden' -ForegroundColor Gray
+    Write-Host '    CLBT -padding <0-48>         内边距（如 10 或 "10, 8"）' -ForegroundColor Gray
     Write-Host '    CLBT -cell-height <0.8-2.0>   行高（如 1.2，越大行距越松）' -ForegroundColor Gray
     Write-Host '    CLBT -antialiasing <模式>     抗锯齿: 灰度柔和 grayscale / 清晰锐利 cleartype / 像素风 aliased' -ForegroundColor Gray
     Write-Host '    CLBT -adjust-colors <策略>    颜色修正: 总是修正 always / 仅索引色 indexed / 不修正 never' -ForegroundColor Gray
@@ -2143,6 +2504,12 @@ function Show-CliHelp {
     Write-Host '    CLBT -gui                    打开图形界面（等同于双击 CLBT-GUI.exe）' -ForegroundColor Gray
     Write-Host '    CLBT -diagnose               环境诊断：设置写到了哪、当前窗口是谁在渲染' -ForegroundColor Gray
     Write-Host '    CLBT -preview "<输出.png>"     按当前参数渲染一张模拟终端预览图（不写设置）' -ForegroundColor Gray
+    Write-Host '    CLBT -profile save <名字>     把当前外观存成一个档案（如 work / game）' -ForegroundColor Gray
+    Write-Host '    CLBT -profile <名字>          应用这个档案' -ForegroundColor Gray
+    Write-Host '    CLBT -profile list            列出所有档案' -ForegroundColor Gray
+    Write-Host '    CLBT -profile delete <名字>   删除档案' -ForegroundColor Gray
+    Write-Host '    CLBT -export "<文件.json>"     把当前外观导出成一个可转发的小文件（背景图内嵌）' -ForegroundColor Gray
+    Write-Host '    CLBT -import "<文件.json>"     导入别人给你的外观文件' -ForegroundColor Gray
     Write-Host '    CLBT -update                 自动更新：查最新版、下载、校验、拉起安装器' -ForegroundColor Gray
     Write-Host '    CLBT -update check           只检查有没有新版（不下载）' -ForegroundColor Gray
     Write-Host '    CLBT -adaptive                开启自适应前景色（透明时按背景明暗切字体深浅）' -ForegroundColor Gray
@@ -2234,6 +2601,69 @@ if ($env:WT_MODE -eq 'uninstall') {
     }
 }
 
+
+if ($env:WT_MODE -eq 'profile') {
+    try {
+        Write-Host ''
+        Write-Host '  || CLBT 配置档案 ||' -ForegroundColor Cyan
+        Write-Host ''
+        $act = [string]$env:WT_PROFILE_ACTION
+        $actLower = $act.Trim().ToLower()
+        if (-not $act -or $actLower -eq 'list') {
+            $list = Get-Profiles
+            Write-Host ('  档案目录: ' + (Get-ProfileDir)) -ForegroundColor DarkGray
+            if (-not $list -or $list.Count -eq 0) {
+                Write-Host '  还没有任何档案。' -ForegroundColor Yellow
+                Write-Host '  保存当前外观:  CLBT -profile save work' -ForegroundColor Gray
+            }
+            else {
+                Write-Host ('  共 ' + $list.Count + ' 个档案:') -ForegroundColor White
+                foreach ($n in $list) {
+                    $f = Join-Path (Get-ProfileDir) ($n + '.json')
+                    $when = (Get-Item -LiteralPath $f).LastWriteTime.ToString('yyyy-MM-dd HH:mm')
+                    Write-Host ('    ' + $n.PadRight(18) + $when) -ForegroundColor Gray
+                }
+                Write-Host ''
+                Write-Host '  应用:  CLBT -profile <名字>      删除:  CLBT -profile delete <名字>' -ForegroundColor DarkGray
+            }
+        }
+        elseif ($actLower -eq 'save') { Save-Profile ([string]$env:WT_PROFILE) }
+        elseif ($actLower -eq 'delete' -or $actLower -eq 'rm' -or $actLower -eq 'remove') { Remove-Profile ([string]$env:WT_PROFILE) }
+        else { Apply-Profile $act }
+        Write-Host ''
+        exit 0
+    }
+    catch {
+        Write-Host ('档案操作失败: ' + $_.Exception.Message) -ForegroundColor Red
+        exit 1
+    }
+}
+
+if ($env:WT_MODE -eq 'export') {
+    try {
+        Write-Host ''
+        Export-Bundle ([string]$env:WT_FILE)
+        Write-Host ''
+        exit 0
+    }
+    catch {
+        Write-Host ('导出失败: ' + $_.Exception.Message) -ForegroundColor Red
+        exit 1
+    }
+}
+
+if ($env:WT_MODE -eq 'import') {
+    try {
+        Write-Host ''
+        Import-Bundle ([string]$env:WT_FILE)
+        Write-Host ''
+        exit 0
+    }
+    catch {
+        Write-Host ('导入失败: ' + $_.Exception.Message) -ForegroundColor Red
+        exit 1
+    }
+}
 
 if ($env:WT_MODE -eq 'update') {
     try {
@@ -2500,7 +2930,9 @@ if ($env:WT_MODE -eq 'cli') {
         -AdjustColors ([string]$env:WT_ADJUST) -CellHeight ([string]$env:WT_CELLHEIGHT) `
         -Antialiasing ([string]$env:WT_AA) -BgAlign ([string]$env:WT_BGALIGN) -BgStretch ([string]$env:WT_BGSTRETCH) `
         -BgOpacity ([string]$env:WT_BGOPACITY) -FontWeight ([string]$env:WT_FONTWEIGHT) `
-        -Acrylic ([string]$env:WT_ACRYLIC)
+        -Acrylic ([string]$env:WT_ACRYLIC) -FontSize ([string]$env:WT_FONTSIZE) `
+        -Cursor ([string]$env:WT_CURSOR) -CursorBlink ([string]$env:WT_CURSORBLINK) `
+        -Scrollbar ([string]$env:WT_SCROLLBAR) -Padding ([string]$env:WT_PADDING)
         Write-Host ''
         if ($style -eq 'win') {
             Write-Host ('  完成：Windows 原生风格' + $styleNote + '（' + $opText + '、默认配色、默认提示符）') -ForegroundColor Green
@@ -2554,7 +2986,9 @@ if ($env:WT_MODE -eq 'apply') {
             -AdjustColors ([string]$env:WT_ADJUST) -CellHeight ([string]$env:WT_CELLHEIGHT) `
             -Antialiasing ([string]$env:WT_AA) -BgAlign ([string]$env:WT_BGALIGN) -BgStretch ([string]$env:WT_BGSTRETCH) `
             -BgOpacity ([string]$env:WT_BGOPACITY) -FontWeight ([string]$env:WT_FONTWEIGHT) `
-            -Acrylic ([string]$env:WT_ACRYLIC)
+            -Acrylic ([string]$env:WT_ACRYLIC) -FontSize ([string]$env:WT_FONTSIZE) `
+            -Cursor ([string]$env:WT_CURSOR) -CursorBlink ([string]$env:WT_CURSORBLINK) `
+            -Scrollbar ([string]$env:WT_SCROLLBAR) -Padding ([string]$env:WT_PADDING)
         if ($env:WT_STATUS_FILE) {
             [System.IO.File]::WriteAllText($env:WT_STATUS_FILE, 'OK', (New-Object System.Text.UTF8Encoding($false)))
         }
@@ -2580,6 +3014,8 @@ Write-Host '请选择操作 (填序号) :' -ForegroundColor White
 Write-Host '  1) 应用美化   选择风格 / 透明度 / 字体，并可选 cmd 提示符与自适应前景色' -ForegroundColor Green
 Write-Host '  2) 撤回修改   还原外观、提示符、cmd 挂钩、自适应（等价于 -uninstall）' -ForegroundColor Gray
 Write-Host '  3) 查看帮助   列出全部命令行用法（等价于 -help）' -ForegroundColor Gray
+Write-Host '  4) 检查更新   看看有没有新版本，有就自动下载并安装' -ForegroundColor Gray
+Write-Host '  5) 配置档案   把当前外观存成 work / game 之类的档案，或应用已有档案' -ForegroundColor Gray
 Write-Host ''
 
 $opPick = $null
@@ -2590,8 +3026,8 @@ for ($otry = 0; $otry -lt 3; $otry++) {
     $inpO = $inpO.Trim()
     if ($inpO -eq '') { $opPick = 1; break }
     $numO = 0
-    if ([int]::TryParse($inpO, [ref]$numO) -and $numO -ge 1 -and $numO -le 3) { $opPick = $numO; break }
-    Write-Host '  请输入 1 / 2 / 3（直接回车 = 1 应用美化）' -ForegroundColor Yellow
+    if ([int]::TryParse($inpO, [ref]$numO) -and $numO -ge 1 -and $numO -le 5) { $opPick = $numO; break }
+    Write-Host '  请输入 1 - 5（直接回车 = 1 应用美化）' -ForegroundColor Yellow
 }
 if (-not $opPick) { $opPick = 1 }
 Write-Host ''
@@ -2610,6 +3046,48 @@ if ($opPick -eq 2) {
 if ($opPick -eq 3) {
     Show-CliHelp
     exit 0
+}
+
+if ($opPick -eq 4) {
+    try { Invoke-CLBTUpdate } catch { }
+    exit 0
+}
+
+if ($opPick -eq 5) {
+    try {
+        $list = Get-Profiles
+        if ($list -and $list.Count -gt 0) {
+            Write-Host ('  现有档案: ' + ($list -join ' / ')) -ForegroundColor Cyan
+        }
+        else {
+            Write-Host '  还没有任何档案。' -ForegroundColor DarkGray
+        }
+        Write-Host ''
+        if ($list -and $list.Count -gt 0) {
+            Write-Host '  要应用哪个档案？（输入名字或序号，直接回车跳过）: ' -NoNewline -ForegroundColor White
+            $pick = Read-Answer
+            if ($pick) {
+                $pick = $pick.Trim()
+                $numP = 0
+                if ([int]::TryParse($pick, [ref]$numP) -and $numP -ge 1 -and $numP -le $list.Count) {
+                    $pick = $list[$numP - 1]
+                }
+                Apply-Profile $pick
+            }
+        }
+        Write-Host ''
+        Write-Host '  把当前外观存成档案？输入名字（如 work / game，直接回车跳过）: ' -NoNewline -ForegroundColor White
+        $newName = Read-Answer
+        if ($newName) { Save-Profile ($newName.Trim()) }
+        Write-Host ''
+        Write-Host '  新开终端标签页生效。' -ForegroundColor DarkGray
+        Write-Host ''
+        exit 0
+    }
+    catch {
+        Write-Host ('档案操作失败: ' + $_.Exception.Message) -ForegroundColor Red
+        exit 1
+    }
 }
 
 # ---- 第一步：选择风格 ----
@@ -2888,6 +3366,38 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
         '右上' { $env:WT_BGALIGN = 'topRight' } '左下' { $env:WT_BGALIGN = 'bottomLeft' } '右下' { $env:WT_BGALIGN = 'bottomRight' }
     }
 
+    Write-Host '  字号 (6-36，如 13；直接回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    $v = Read-Answer
+    $v = $v.Trim(); if ($v) { $env:WT_FONTSIZE = $v }
+
+    Write-Host '  光标 1) 竖线  2) 方块  3) 空心块  4) 下划线   (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    $v = Read-Answer
+    switch ($v.Trim()) {
+        '1' { $env:WT_CURSOR = 'bar' } '2' { $env:WT_CURSOR = 'block' }
+        '3' { $env:WT_CURSOR = 'emptyBox' } '4' { $env:WT_CURSOR = 'underline' }
+        '竖线' { $env:WT_CURSOR = 'bar' } '方块' { $env:WT_CURSOR = 'block' }
+        '空心块' { $env:WT_CURSOR = 'emptyBox' } '下划线' { $env:WT_CURSOR = 'underline' }
+    }
+
+    Write-Host '  光标闪烁？1) 闪  2) 不闪   (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    $v = Read-Answer
+    switch ($v.Trim()) {
+        '1' { $env:WT_CURSORBLINK = 'on' } '2' { $env:WT_CURSORBLINK = 'off' }
+        '闪' { $env:WT_CURSORBLINK = 'on' } '不闪' { $env:WT_CURSORBLINK = 'off' }
+        'y' { $env:WT_CURSORBLINK = 'on' } 'n' { $env:WT_CURSORBLINK = 'off' }
+    }
+
+    Write-Host '  滚动条 1) 显示  2) 隐藏   (回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    $v = Read-Answer
+    switch ($v.Trim()) {
+        '1' { $env:WT_SCROLLBAR = 'visible' } '2' { $env:WT_SCROLLBAR = 'hidden' }
+        '显示' { $env:WT_SCROLLBAR = 'visible' } '隐藏' { $env:WT_SCROLLBAR = 'hidden' }
+    }
+
+    Write-Host '  内边距 (0-48，或 "10, 8"；直接回车 = 不改): ' -NoNewline -ForegroundColor DarkCyan
+    $v = Read-Answer
+    $v = $v.Trim(); if ($v) { $env:WT_PADDING = $v }
+
     Write-Host '  背景图浓淡 (0.15-0.9，越小越透；直接回车 = 默认 0.55): ' -NoNewline -ForegroundColor DarkCyan
     $v = Read-Answer
     $v = $v.Trim(); if ($v) { $env:WT_BGOPACITY = $v }
@@ -2912,6 +3422,14 @@ if ($ansAdv.Trim().ToLower() -in @('y', 'yes', '是')) {
                 "  颜色修正=" + $(if ($env:WT_ADJUST) { $adjText[$env:WT_ADJUST] } else { '保持' }) +
                 "  字重=" + $(if ($env:WT_FONTWEIGHT) { if ($env:WT_FONTWEIGHT -eq 'bold') { '粗体' } else { '常规' } } else { '保持' }) +
                 "  亚克力=" + $(if ($env:WT_ACRYLIC) { if ($env:WT_ACRYLIC -eq 'off') { '关（真透明）' } else { '开' } } else { '保持' })) -ForegroundColor Cyan
+    $curText = @{ bar = '竖线'; filledBox = '方块'; emptyBox = '空心块'; underline = '下划线'; doubleUnderline = '双下划线'; vintage = '复古' }
+    if ($env:WT_FONTSIZE -or $env:WT_CURSOR -or $env:WT_CURSORBLINK -or $env:WT_SCROLLBAR -or $env:WT_PADDING) {
+        Write-Host ("  细节    : 字号=" + $(if ($env:WT_FONTSIZE) { $env:WT_FONTSIZE } else { '保持' }) +
+                    "  光标=" + $(if ($env:WT_CURSOR) { $curText[$env:WT_CURSOR] } else { '保持' }) +
+                    "  闪烁=" + $(if ($env:WT_CURSORBLINK) { if ($env:WT_CURSORBLINK -eq 'on') { '闪' } else { '不闪' } } else { '保持' }) +
+                    "  滚动条=" + $(if ($env:WT_SCROLLBAR) { if ($env:WT_SCROLLBAR -eq 'hidden') { '隐藏' } else { '显示' } } else { '保持' }) +
+                    "  内边距=" + $(if ($env:WT_PADDING) { $env:WT_PADDING } else { '保持' })) -ForegroundColor Cyan
+    }
     if ($env:WT_BGALIGN -or $env:WT_BGOPACITY -or $env:WT_BGSTRETCH) {
         Write-Host ("  背景图  : 对齐=" + $(if ($env:WT_BGALIGN) { $alignText[$env:WT_BGALIGN] } else { '保持' }) +
                     "  浓淡=" + $(if ($env:WT_BGOPACITY) { $env:WT_BGOPACITY } else { '保持' }) +
@@ -3025,6 +3543,16 @@ if ($ok) {
     }
     if ($env:WT_CMDPROMPT -eq '1') {
         Write-Host '  cmd 也已设置；撤销请运行：terminal-setup.cmd --undo-cmd' -ForegroundColor DarkGray
+    }
+    # 顺手存成档案（对应 -profile save）
+    Write-Host ''
+    Write-Host '  把这次的观感存成档案？输入名字（如 work / game，直接回车跳过）' -ForegroundColor White
+    Write-Host '  以后 CLBT -profile 名字 就能一键切回来' -ForegroundColor DarkGray
+    Write-Host '  > ' -NoNewline -ForegroundColor DarkCyan
+    $saveName = Read-Answer
+    if ($saveName) {
+        try { Save-Profile ($saveName.Trim()) }
+        catch { Write-Host ('  存档案失败: ' + $_.Exception.Message) -ForegroundColor Yellow }
     }
 }
 else {

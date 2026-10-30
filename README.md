@@ -68,6 +68,11 @@ CLBT -face "0xProto Nerd Font Mono"     直接用已安装的字族（不用传�
 CLBT -font-weight bold                 字重：常规 normal / 粗体 bold
 CLBT -acrylic off                      关掉亚克力磨砂（这样才是真透明，能看到桌面）
 CLBT -install-fonts                    只安装内置的 10 个字体，不改任何设置
+CLBT -font-size 14                     字号 6–36（默认 12）
+CLBT -cursor block                     光标：竖线 bar / 方块 block / 空心块 emptyBox / 下划线 underline
+CLBT -cursor-blink off                 光标闪烁 on|off
+CLBT -scrollbar hidden                 滚动条 显示 visible / 隐藏 hidden
+CLBT -padding "12, 6"                  内边距 0–48（也可只写一个数）
 CLBT -cell-height 1.2                  行高 0.8–2.0
 CLBT -antialiasing grayscale           抗锯齿：grayscale/cleartype/aliased
 CLBT -adjust-colors always             不可辨颜色修正：always/indexed/never
@@ -76,6 +81,12 @@ CLBT -adaptive                         开启自适应前景色
 CLBT -adaptive off                     关闭
 CLBT -encoding on|off                  让 cmd 标签以 UTF-8 启动（消除 bat 乱码）
 
+CLBT -profile save work                把当前外观存成档案（work / game 随便叫）
+CLBT -profile work                     一键切回这套外观
+CLBT -profile list                     列出所有档案
+CLBT -profile delete work              删除档案
+CLBT -export "D:\me.json"              导出当前外观（背景图内嵌，可发人）
+CLBT -import "D:\me.json"              导入别人给的外观文件
 CLBT -gui                              打开图形界面（等价双击 CLBT-GUI.exe）
 CLBT -preview "D:\shot.png"            先在 PNG 里看效果，不写任何设置（可叠加其它参数）
 CLBT -diagnose                         环境诊断：设置写到了哪、当前窗口由谁渲染
@@ -182,6 +193,28 @@ CLBT -preview "D:\shot.png" -face "0xProto Nerd Font Mono" -font-weight bold
 
 背景和文字是分开的：渲染器加 `WT_PREVIEW_NOTEXT=1` 只画「壁纸 → 磨砂 → 终端底色 →
 背景图」这几层，文字层由界面的 `Canvas` 自己画 —— 所以文字才编辑得动。
+
+## 配置档案与导出
+
+调好一套观感后不想再动？存成档案，以后一条命令切回来：
+
+```bat
+CLBT -profile save work      :: 存成 work
+CLBT -win                     :: 随便改
+CLBT -profile work            :: 切回来
+```
+
+- 档案在 `%LOCALAPPDATA%\WindowsCommandLineBeautify\profiles\<名字>.json`
+- 里面是**具体值**（配色 16 色 + 透明度/亚克力/字体/光标/滚动条/内边距/背景图路径），
+  换机器也能用；只接管本工具会写的那十几个字段，别的设置不碰
+- 想发给别人就用导出（背景图会内嵌进 JSON，最大 12MB）：
+
+```bat
+CLBT -export "D:\我的外观.json"
+CLBT -import "D:\我的外观.json"
+```
+
+图形界面点「配置档案」有同样的功能（列表 / 应用 / 删除 / 保存 / 导出 / 导入）。
 
 ## 自动更新
 

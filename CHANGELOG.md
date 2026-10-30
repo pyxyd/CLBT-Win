@@ -1,5 +1,67 @@
 # 更新日志
 
+## v1.1.5
+
+### 新功能：更多终端细节（字号 / 光标 / 闪烁 / 滚动条 / 内边距）
+
+```bat
+CLBT -font-size 14                 字号 6-36（原来写死 12）
+CLBT -cursor block                 光标：bar 竖线 / block 方块 / emptyBox 空心块 / underline 下划线
+CLBT -cursor-blink off             光标闪烁 on / off
+CLBT -scrollbar hidden             滚动条显示 visible / 隐藏 hidden
+CLBT -padding "12, 6"              内边距 0-48，可写 "水平, 垂直"
+```
+
+图形界面「细节」卡片里多了这五项；交互菜单的「高级外观微调」也跟着多问了这几句。
+
+### 新功能：配置档案（work / game 一键切换）
+
+```bat
+CLBT -profile save work    把当前外观存成档案
+CLBT -profile work         切回这套外观
+CLBT -profile list         列出所有档案
+CLBT -profile delete work  删除
+```
+
+- 存在 `%LOCALAPPDATA%\WindowsCommandLineBeautify\profiles\<名字>.json`
+- 档案里带配色方案（16 色）+ 透明度/亚克力/字体/光标/滚动条/内边距/背景图路径
+- 只接管本工具会写的那十几个字段，其余 Terminal 设置原样保留
+- 交互菜单加了主菜单第 5 项；图形界面加了「配置档案」按钮（列表 + 应用 / 删除 / 保存）
+
+### 新功能：导出 / 导入外观
+
+```bat
+CLBT -export "D:\me.json"    导出（背景图会内嵌成 base64，最大 12MB）
+CLBT -import "D:\me.json"    导入别人给的文件
+```
+
+图形界面「配置档案」里也有「导出成文件… / 导入文件…」。实测导出的包 6.09 MB，
+导入后背景图按内容哈希落回 `background_1af6dad0.png`，透明度/配色/字体全部还原。
+
+### 新功能：交互菜单里加了「检查更新」
+
+主菜单第 4 项，直接走 `-update` 的全流程（查版本 → 下载 → 校验 → 拉起安装器）。
+
+### 这一轮找到并修掉的 bug
+
+1. **`$d[$k]` 取 PSCustomObject 会拿到空对象**（Major）：`Get-ManagedBundle` 用 `$d[$k]` 读字段，
+   PowerShell 对 PSCustomObject 的字符串索引返回空 PSObject —— 存出来的档案里
+   `colorScheme`/`opacity`/`font` 全是 `{}`，套回去等于把设置写坏。改成 `$d.($k)`。
+2. **`-face` 会把字号冲回 12**（Major）：换字体时无条件 `font.size = 12`，
+   显式 `-font-size 15` 当场失效。改成「显式值 > 沿用已有 > 默认 12」。
+3. **坏档案会把 settings 写脏**（Minor）：手改/旧版档案里可能有 `{}`，现在当成"没有这个值"，
+   顺便把 settings 里同样的空对象清掉。
+
+### 验证
+
+- `-font-size 15 -face X` → `settings.json` 里 `font = {face: X, size: 15}`；再单独 `-face Y` → 字号保持 15
+- `-cursor underline -cursor-blink off -scrollbar visible -padding "12, 6"` → 四个字段都写对
+- `-profile save work` → 改 `-win` → `-profile work` → 恢复 Tango/36%/方块光标/字号 14/滚动条隐藏
+- `-export` 6.09MB（内嵌背景图）→ `-win` → `-import` → 背景图、透明度、配色、字体全部回来
+- 菜单主界面显示 1-5 项，第 5 项能列出并应用档案，第 4 项走更新
+- 图形界面：新五项能读能写、`dirty` 不会自己变脏、配置档案对话框能列/存/删
+- `py_compile` / `pyflakes` 无告警
+
 ## v1.1.4
 
 ### 修：四个稳定性 bug（都是实测复现过的）
