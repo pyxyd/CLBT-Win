@@ -26,6 +26,7 @@ CLBT 安装器
 import argparse
 import ctypes
 import glob
+import hashlib
 import os
 import shutil
 import subprocess
@@ -281,6 +282,26 @@ def bundled_gui_path():
     return os.path.join(HERE, GUI_NAME)
 
 
+def same_content(a, b):
+    """两个文件内容是否完全一致。只比大小不行：只改版本号的更新字节数一样，
+    会被当成"已是最新"跳过（实测 v1.1.3 -> v1.1.4 就是这样漏更的）。"""
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        h = hashlib.sha256()
+        with open(a, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        d1 = h.hexdigest()
+        h = hashlib.sha256()
+        with open(b, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return d1 == h.hexdigest()
+    except Exception:
+        return False
+
+
 def ensure_crlf(path):
     """把批处理文件的行尾规范成 CRLF。
     LF 行尾会让 cmd 把内嵌的 PowerShell 正文当成命令执行，
@@ -367,7 +388,7 @@ def do_install(target_dir, do_encoding=True, keep_old=False):
     # 1) 把工具写到目标目录（自带的那份优先）
     dst_tool = os.path.join(target_dir, TOOL_NAME)
     src_size = os.path.getsize(src)
-    if os.path.isfile(dst_tool) and os.path.getsize(dst_tool) == src_size:
+    if os.path.isfile(dst_tool) and same_content(dst_tool, src):
         say(f"    工具本体已是最新，跳过: {dst_tool}")
     else:
         if os.path.isfile(dst_tool):
@@ -393,7 +414,7 @@ def do_install(target_dir, do_encoding=True, keep_old=False):
         written = False
         for attempt in range(6):
             try:
-                if os.path.isfile(gui_dst) and os.path.getsize(gui_dst) == os.path.getsize(gui_src):
+                if os.path.isfile(gui_dst) and same_content(gui_dst, gui_src):
                     say(f"    图形界面已是最新，跳过: {gui_dst}")
                     written = True
                     break

@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
 APP_TITLE = "CLBT · Windows 命令行美化工具"
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 
 # ---- 配色（跟终端黑玻璃一个调子）----
 BG = "#0C0C0C"
@@ -337,13 +337,18 @@ def run_payload(tool_path, extra_env, timeout=60):
         env = dict(os.environ)
         for k in _OUR_ENV:
             env.pop(k, None)
-        env.setdefault("WT_SELF", tool_path)
+        env["WT_SELF"] = tool_path      # 父进程可能带着旧的 WT_SELF，必须覆盖
         env.update(extra_env)
-        p = subprocess.run(
-            [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tmp],
-            capture_output=True, cwd=os.path.dirname(tool_path) or None,
-            creationflags=0x08000000, env=env, timeout=timeout,
-            stdin=subprocess.DEVNULL)      # 万一载荷掉进交互菜单，别让它等输入卡死
+        try:
+            p = subprocess.run(
+                [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tmp],
+                capture_output=True, cwd=os.path.dirname(tool_path) or None,
+                creationflags=0x08000000, env=env, timeout=timeout,
+                stdin=subprocess.DEVNULL)  # 万一载荷掉进交互菜单，别让它等输入卡死
+        except subprocess.TimeoutExpired:
+            return None, "脚本超过 %d 秒没跑完（网络卡住或杀软在扫临时 .ps1）" % timeout
+        except Exception as e:  # noqa: BLE001
+            return None, "启动 powershell 失败：%s" % e
         out = (p.stdout + p.stderr).decode("utf-8", "replace")
         return p.returncode, out
     finally:
@@ -600,6 +605,7 @@ class TermView:
 
     def finish_command(self, out):
         """命令跑完：把"执行中"那行换成真正的输出"""
+        self.busy = False
         if self.lines and len(self.lines[-1]) == 1 and self.lines[-1][0][0].strip() == "执行中 . . .":
             self.lines.pop()
         lines = (out or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -723,6 +729,26 @@ class TermView:
         c.bind("<Control-V>", self._paste)
         c.bind("<Button-3>", self._paste)          # 右键也能粘
         c.bind("<MouseWheel>", self._on_wheel)
+        c.bind("<Configure>", self._on_resize)
+
+    def _on_resize(self, ev):
+        # 卡片宽度变了才值得重画；拖动窗口时别每一像素都渲染一次
+        if abs(int(ev.width) - getattr(self, "_last_w", 0)) < 40:
+            return
+        self._last_w = int(ev.width)
+        if getattr(self, "_resize_job", None):
+            try:
+                self.canvas.after_cancel(self._resize_job)
+            except Exception:  # noqa: BLE001
+                pass
+        self._resize_job = self.canvas.after(400, self._rerender_bg)
+
+    def _rerender_bg(self):
+        self._resize_job = None
+        try:
+            self.app._render_preview()
+        except Exception:  # noqa: BLE001
+            pass
 
     def focus(self):
         self.canvas.focus_set()
@@ -783,6 +809,12 @@ class TermView:
         return "break"
 
     def _on_return(self, _ev=None):
+        if self.busy:
+            # 一条命令还在跑：别让两条命令的输出串到一起（复现过：输出会挂到下一条命令下面）
+            self.lines.append([("  上一条命令还没跑完，等它结束再回车 . . .", "dim")])
+            self.offset = 0
+            self.redraw()
+            return "break"
         line = self.input.strip()
         self.input = ""
         self.lines.append(self._prompt_runs() + ([(line, "fg")] if line else []))
@@ -800,6 +832,7 @@ class TermView:
             self.append_output("（这是预览窗口，关掉右上角的窗口才能退出 CLBT）")
             self.redraw()
             return "break"
+        self.busy = True
         self.lines.append([("  执行中 . . .", "dim")])
         self.redraw()
         threading.Thread(target=self._run, args=(line,), daemon=True).start()
@@ -1284,7 +1317,11 @@ class App:
         self.lbl_prev_info.configure(text="正在生成背景 . . .")
 
         def work():
-            rc, dt = render_preview_direct(self.tool, st, out, pw, ph, notext=True)
+            try:
+                rc, dt = render_preview_direct(self.tool, st, out, pw, ph, notext=True)
+            except Exception as e:  # noqa: BLE001
+                rc, dt = -1, 0.0
+                self.q.put(("line", "预览失败: %s" % e))
             self.q.put(("preview", (seq, rc, out, st, dt)))
 
         threading.Thread(target=work, daemon=True).start()
@@ -1336,8 +1373,11 @@ class App:
             except Exception as e:  # noqa: BLE001
                 self.q.put(("update_info", (None, "读不到工具里的载荷：%s" % e, silent)))
                 return
-            rc, out = run_payload(self.tool, {"WT_MODE": "update", "WT_UPDATE_JSON": "1"},
-                                  timeout=90)
+            try:
+                rc, out = run_payload(self.tool, {"WT_MODE": "update", "WT_UPDATE_JSON": "1"},
+                                      timeout=90)
+            except Exception as e:  # noqa: BLE001
+                rc, out = None, "检查更新时出错：%s" % e
             info, err = None, None
             if rc is None:
                 err = out or "无法运行内置脚本"
